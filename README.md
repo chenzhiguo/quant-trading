@@ -323,9 +323,50 @@ symbols = get_watchlist("all")
 
 ---
 
+## 自动交易
+
+系统支持全自动交易：扫描信号 → 风控检查 → 自动下单。
+
+### 运行自动交易
+
+```bash
+cd ~/clawd/quant-trading
+source .venv/bin/activate
+
+# 预览模式（不实际下单）
+python auto_trade.py --preview
+
+# 执行自动交易
+python auto_trade.py
+
+# 指定策略和参数
+python auto_trade.py --strategy momentum --max-buy 2 --min-confidence 0.2
+```
+
+### 自动交易参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--preview, -p` | False | 预览模式，不实际下单 |
+| `--strategy, -s` | all | 策略选择：all/ma/momentum |
+| `--watchlist, -w` | us_tech | 自选股列表 |
+| `--max-buy, -m` | 3 | 单次最多买入订单数 |
+| `--min-confidence, -c` | 0.1 | 最低置信度要求 |
+
+### 自动交易逻辑
+
+1. **卖出优先** —— 先处理卖出信号，释放资金
+2. **不重复买入** —— 已持有的股票不会再买
+3. **智能仓位** —— 自动计算买入数量（不超过单笔限制）
+4. **风控拦截** —— 违反风控规则的订单会被拒绝
+
+---
+
 ## 定时任务
 
-系统通过 Clawdbot Cron 实现定时信号扫描：
+系统通过 Clawdbot Cron 实现自动化：
+
+### 信号扫描任务
 
 | 任务名 | Cron 表达式 | 时间 (GMT+8) | 说明 |
 |--------|-------------|--------------|------|
@@ -333,16 +374,36 @@ symbols = get_watchlist("all")
 | `quant-signal-mid` | `0 0 * * 2-6` | 周二至周六 00:00 | 盘中扫描 |
 | `quant-signal-close` | `30 3 * * 2-6` | 周二至周六 03:30 | 收盘前扫描 |
 
+### 自动交易任务
+
+| 任务名 | Cron 表达式 | 时间 (GMT+8) | 说明 |
+|--------|-------------|--------------|------|
+| `quant-auto-trade` | `45 21 * * 1-5` | 周一至周五 21:45 | 开盘后自动交易 |
+
+### 止损监控任务
+
+| 任务名 | Cron 表达式 | 时间 (GMT+8) | 说明 |
+|--------|-------------|--------------|------|
+| `quant-stop-monitor` | `*/10 22-23,0-4 * * 1-5` | 交易时段每10分钟 | 止损止盈监控 |
+
 **美股交易时间（北京时间）：**
 - 夏令时: 21:30 - 04:00
 - 冬令时: 22:30 - 05:00
 
-**手动触发扫描：**
+**手动触发：**
 
 ```bash
 cd ~/clawd/quant-trading
 source .venv/bin/activate
+
+# 信号扫描
 python scan_signals.py
+
+# 自动交易
+python auto_trade.py
+
+# 止损监控
+python monitor_stops.py
 ```
 
 ---
