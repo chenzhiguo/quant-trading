@@ -13,7 +13,7 @@ except ImportError:
 
 # 尝试导入 longport，如果失败则使用 Mock
 try:
-    from longport.openapi import Config, QuoteContext, Period, AdjustType
+    from longport.openapi import Config, QuoteContext, Period, AdjustType, CalcIndex
     # 尝试导入财务上下文
     try:
         from longport.openapi import FinancialContext
@@ -169,16 +169,33 @@ class DataFetcher:
         包括: PE, PB, Market Cap, ROE, Debt/Equity, 12月动量, 200日均线
         """
         quotes = self.get_realtime_quotes(symbols)
+        
+        # 尝试批量获取计算指标 (PE, PB, 市值)
+        calc_indices = {}
+        if HAS_LONGPORT and self.quote_ctx:
+            try:
+                # 获取计算指标: PE TTM, PB, 总市值
+                indexes_to_fetch = [CalcIndex.PeTtmRatio, CalcIndex.PbRatio, CalcIndex.TotalMarketValue]
+                indices = self.quote_ctx.calc_indexes(symbols, indexes_to_fetch)
+                for item in indices:
+                    calc_indices[item.symbol] = item
+            except Exception as e:
+                print(f"⚠️ Failed to fetch calc indexes: {e}")
+
         result = []
         
         for q in quotes:
             symbol = q.symbol
             
             # 1. 基础行情与估值
-            # 注意：不同 API 版本字段可能不同，这里使用 getattr 防御
-            pe_ttm = getattr(q, 'pe_ttm', None)
-            pb = getattr(q, 'pb_ratio', None)
-            market_cap = getattr(q, 'market_cap', 0)
+            # 从 calc_indexes 获取估值数据
+            idx_data = calc_indices.get(symbol)
+            
+            # 优先从 calc_index 获取，其次从 quote 获取，最后默认为 0
+            pe_ttm = getattr(idx_data, 'pe_ttm_ratio', None) or getattr(q, 'pe_ttm', 0)
+            pb = getattr(idx_data, 'pb_ratio', None) or getattr(q, 'pb_ratio', 0)
+            market_cap = getattr(idx_data, 'total_market_value', None) or getattr(q, 'market_cap', 0)
+            
             price = float(q.last_done)
             
             # 2. 计算动量 (12个月涨幅 & MA200)
@@ -213,16 +230,30 @@ class DataFetcher:
                 mom_12m = None
             
             # 3. 财务质量 (ROE, Debt/Equity)
-            # 如果没有 financial ctx，暂时给默认值或 mock
-            roe = 0.15  # 示例默认值 (15%)
-            debt_to_equity = 0.5 # 示例默认值 (50%)
+            # 策略：优先使用 API 数据，如果没有则使用估算值 (ROE ≈ PB / PE)
             
+            # 初始化默认值
+            roe = 0
+            debt_to_equity = 0.5  # 默认假设为中等负债水平
+            
+            # 尝试从 Financial Context 获取 (如果已连接真实 API)
             if self.financial_ctx:
-                # TODO: 实现真实的财务数据获取
-                # indicators = self.financial_ctx.get_key_indicators(symbol)
-                # roe = indicators.roe
-                pass
-                
+                try:
+                    # 伪代码：实际需根据 API 文档调用
+                    # indicators = self.financial_ctx.get_key_indicators(symbol)
+                    # roe = indicators.roe
+                    pass 
+                except Exception:
+                    pass
+            
+            # 如果没有获取到 ROE，使用 PE/PB 推算
+            # ROE = (P/B) / (P/E)
+            if roe == 0 and pe_ttm and pe_ttm > 0 and pb:
+                roe = pb / pe_ttm
+            elif roe == 0:
+                # 兜底默认值：给一个市场平均水平，避免排序报错
+                roe = 0.12 # 12%
+            
             result.append({
                 "symbol": symbol,
                 "price": price,

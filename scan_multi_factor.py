@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env ./venv/bin/python3
 """
 多因子策略扫描脚本
 
