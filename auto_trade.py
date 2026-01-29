@@ -34,6 +34,7 @@ from core.trader import get_trader
 from core.risk import RiskConfig, get_risk_manager
 from strategies.ma_cross import MACrossStrategy
 from strategies.momentum import MomentumStrategy
+from strategies.small_cap_growth import SmallCapGrowthStrategy, create_small_cap_strategy
 from strategies.base import Signal, TradeSignal
 from config.watchlist import get_watchlist
 
@@ -273,9 +274,9 @@ def main():
     )
     parser.add_argument(
         "--strategy", "-s",
-        choices=["all", "ma", "momentum"],
+        choices=["all", "ma", "momentum", "smallcap"],
         default="all",
-        help="使用的策略"
+        help="使用的策略 (all, ma, momentum, smallcap)"
     )
     parser.add_argument(
         "--watchlist", "-w",
@@ -325,6 +326,8 @@ def main():
         strategies.append(MACrossStrategy(short_period=5, long_period=20))
     if args.strategy in ["all", "momentum"]:
         strategies.append(MomentumStrategy(lookback=20, rsi_period=14))
+    if args.strategy in ["all", "smallcap"]:
+        strategies.append(create_small_cap_strategy(top_n=10))
     
     print(f"📈 策略: {', '.join(s.name for s in strategies)}")
     
