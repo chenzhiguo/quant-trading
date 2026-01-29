@@ -29,6 +29,9 @@ class RiskLevel(Enum):
 @dataclass
 class RiskConfig:
     """风控配置"""
+    # 资金控制
+    max_trading_capital: float = None          # 交易资金上限（None=使用账户全部资金）
+    
     # 仓位控制
     max_single_position_pct: float = 0.10      # 单笔最大仓位 (10%)
     max_total_position_pct: float = 0.80       # 总仓位上限 (80%)
@@ -144,6 +147,18 @@ class RiskManager:
         self._log_event("RESUME_TRADING", {})
         print("✅ 交易已恢复")
     
+    # ==================== 资金上限 ====================
+    
+    def get_effective_balance(self, account_balance: float) -> float:
+        """
+        获取有效交易资金（考虑 max_trading_capital 限制）
+        
+        如果设置了 max_trading_capital，返回它与账户余额的较小值
+        """
+        if self.config.max_trading_capital and self.config.max_trading_capital > 0:
+            return min(account_balance, self.config.max_trading_capital)
+        return account_balance
+    
     # ==================== 订单验证 ====================
     
     def validate_order(
@@ -165,6 +180,9 @@ class RiskManager:
         if self._emergency_stop:
             return False, "交易已紧急停止，请先调用 resume_trading()"
         
+        # 使用有效交易资金（考虑 max_trading_capital 限制）
+        effective_balance = self.get_effective_balance(account_balance)
+        
         order_value = quantity * price
         
         # 检查 2: 订单金额范围
@@ -175,7 +193,7 @@ class RiskManager:
             return False, f"订单金额 {order_value:.2f} 超过最大限制 {self.config.max_order_value}"
         
         # 检查 3: 单笔仓位限制
-        max_single_value = account_balance * self.config.max_single_position_pct
+        max_single_value = effective_balance * self.config.max_single_position_pct
         if order_value > max_single_value:
             return False, f"订单金额 {order_value:.2f} 超过单笔仓位限制 {max_single_value:.2f} ({self.config.max_single_position_pct:.0%})"
         
@@ -183,15 +201,15 @@ class RiskManager:
         if side.lower() == "buy":
             current_position_value = sum(p.get("market_value", 0) for p in current_positions)
             new_total = current_position_value + order_value
-            max_total_value = account_balance * self.config.max_total_position_pct
+            max_total_value = effective_balance * self.config.max_total_position_pct
             
             if new_total > max_total_value:
                 return False, f"买入后总仓位 {new_total:.2f} 将超过限制 {max_total_value:.2f} ({self.config.max_total_position_pct:.0%})"
         
         # 检查 5: 现金保留
         if side.lower() == "buy":
-            min_cash = account_balance * self.config.min_cash_reserve_pct
-            available_cash = account_balance - sum(p.get("market_value", 0) for p in current_positions)
+            min_cash = effective_balance * self.config.min_cash_reserve_pct
+            available_cash = effective_balance - sum(p.get("market_value", 0) for p in current_positions)
             if available_cash - order_value < min_cash:
                 return False, f"买入后现金将低于保留要求 {min_cash:.2f} ({self.config.min_cash_reserve_pct:.0%})"
         
@@ -203,7 +221,7 @@ class RiskManager:
         
         # 检查 7: 每日亏损限额
         if daily_stats["realized_pnl"] < 0:
-            loss_pct = abs(daily_stats["realized_pnl"]) / account_balance
+            loss_pct = abs(daily_stats["realized_pnl"]) / effective_balance
             if loss_pct >= self.config.daily_loss_limit_pct:
                 return False, f"已达到每日亏损限额 ({self.config.daily_loss_limit_pct:.1%})"
         
@@ -360,10 +378,12 @@ class RiskManager:
         Returns:
             建议买入数量
         """
+        # 使用有效交易资金
+        effective_balance = self.get_effective_balance(account_balance)
         risk_pct = risk_pct or self.config.max_single_position_pct
         
         # 计算最大可用金额
-        max_value = account_balance * risk_pct
+        max_value = effective_balance * risk_pct
         max_value = min(max_value, self.config.max_order_value)
         
         # 计算数量（美股通常最小单位是1股）
@@ -380,6 +400,9 @@ class RiskManager:
         quotes: Dict[str, float]
     ) -> str:
         """生成风险报告"""
+        # 获取有效交易资金
+        effective_balance = self.get_effective_balance(account_balance)
+        
         lines = []
         lines.append("=" * 50)
         lines.append("📊 风险报告")
@@ -388,12 +411,15 @@ class RiskManager:
         
         # 账户概览
         total_position_value = sum(p.get("market_value", 0) for p in positions)
-        position_pct = total_position_value / account_balance if account_balance > 0 else 0
+        position_pct = total_position_value / effective_balance if effective_balance > 0 else 0
         
         lines.append(f"\n💰 账户概览:")
         lines.append(f"  总资产: {account_balance:,.2f}")
+        if self.config.max_trading_capital and self.config.max_trading_capital > 0:
+            lines.append(f"  交易资金上限: {self.config.max_trading_capital:,.2f}")
+        lines.append(f"  有效交易资金: {effective_balance:,.2f}")
         lines.append(f"  持仓市值: {total_position_value:,.2f} ({position_pct:.1%})")
-        lines.append(f"  可用现金: {account_balance - total_position_value:,.2f}")
+        lines.append(f"  可用额度: {effective_balance - total_position_value:,.2f}")
         
         # 持仓风险
         lines.append(f"\n📈 持仓风险:")
