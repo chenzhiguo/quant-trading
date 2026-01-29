@@ -22,42 +22,67 @@ from .risk import get_risk_manager, RiskConfig, TradeRecord
 class Trader:
     """交易执行器（带风控）"""
     
-    def __init__(self, dry_run: bool = None, risk_config: RiskConfig = None):
+    def __init__(self, dry_run: bool = False, risk_config: RiskConfig = None):
         """
         初始化交易器
         
         Args:
-            dry_run: 是否模拟执行（None 时根据环境变量决定）
+            dry_run: 是否完全不调用API（仅用于代码测试）
+                    - False: 调用真实API（模拟盘或实盘取决于API凭证）
+                    - True: 不调用API，仅打印
             risk_config: 风控配置
         """
         self.config = Config.from_env()
         self.trade_ctx = TradeContext(self.config)
+        self.dry_run = dry_run
         
-        # 根据环境变量决定是否 dry_run
-        if dry_run is None:
-            env = os.getenv("LONGPORT_ENV", "paper")
-            self.dry_run = env != "production"
-        else:
-            self.dry_run = dry_run
+        # 检测账户类型（通过环境变量或API）
+        self.account_type = os.getenv("LONGPORT_ACCOUNT_TYPE", "paper")  # paper 或 live
         
         # 初始化风控
         self.risk = get_risk_manager(config=risk_config)
         
         if self.dry_run:
-            print("🔔 交易器已启动 [模拟模式]")
-        else:
+            print("🔔 交易器已启动 [测试模式 - 不调用API]")
+        elif self.account_type == "live":
             print("⚠️ 交易器已启动 [实盘模式]")
+        else:
+            print("🔔 交易器已启动 [模拟盘]")
     
     def get_account_balance(self) -> list:
         """获取账户余额"""
         return self.trade_ctx.account_balance()
     
     def get_total_balance(self, currency: str = "USD") -> float:
-        """获取指定币种的总余额"""
+        """获取指定币种的总余额，如果没有则按汇率换算"""
         balances = self.get_account_balance()
+        
+        # 先尝试直接获取
         for b in balances:
             if b.currency == currency:
                 return float(b.total_cash)
+        
+        # 如果没有目标币种，尝试换算
+        # 汇率（大致）：HKD/USD ≈ 7.8
+        exchange_rates = {
+            ("HKD", "USD"): 1 / 7.8,
+            ("USD", "HKD"): 7.8,
+            ("CNY", "USD"): 1 / 7.2,
+            ("USD", "CNY"): 7.2,
+        }
+        
+        for b in balances:
+            rate_key = (b.currency, currency)
+            if rate_key in exchange_rates:
+                return float(b.total_cash) * exchange_rates[rate_key]
+        
+        # 如果还是找不到，返回最大的余额（假设可以换汇）
+        if balances:
+            max_balance = max(balances, key=lambda x: float(x.total_cash))
+            # 假设是 HKD，转 USD
+            if max_balance.currency == "HKD" and currency == "USD":
+                return float(max_balance.total_cash) / 7.8
+        
         return 0.0
     
     def get_positions(self) -> list:
@@ -390,12 +415,14 @@ class Trader:
 _trader = None
 
 
-def get_trader(dry_run: bool = None, risk_config: RiskConfig = None) -> Trader:
+def get_trader(dry_run: bool = False, risk_config: RiskConfig = None) -> Trader:
     """
     获取交易器单例
     
     Args:
-        dry_run: 是否模拟模式（None 时根据 LONGPORT_ENV 环境变量决定）
+        dry_run: 是否完全不调用API（默认False，会调用真实API）
+                 - False: 调用API（模拟盘会执行模拟交易）
+                 - True: 不调用API，仅打印日志
         risk_config: 风控配置
     """
     global _trader

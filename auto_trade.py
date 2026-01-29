@@ -264,7 +264,12 @@ def main():
     parser.add_argument(
         "--preview", "-p",
         action="store_true",
-        help="预览模式（不实际下单）"
+        help="预览模式（扫描信号但不下单）"
+    )
+    parser.add_argument(
+        "--dry-run", "-d",
+        action="store_true",
+        help="测试模式（不调用API，仅打印）"
     )
     parser.add_argument(
         "--strategy", "-s",
@@ -298,9 +303,15 @@ def main():
     
     # 初始化
     risk_config = load_risk_config()
-    trader = get_trader(risk_config=risk_config)
+    trader = get_trader(dry_run=args.dry_run, risk_config=risk_config)
     
-    mode = "预览模式" if args.preview else ("模拟盘" if trader.dry_run else "⚠️ 实盘")
+    # 确定运行模式
+    if args.preview:
+        mode = "预览模式（仅扫描）"
+    elif args.dry_run:
+        mode = "测试模式（不调用API）"
+    else:
+        mode = f"{'模拟盘' if trader.account_type == 'paper' else '⚠️ 实盘'}"
     print(f"📊 运行模式: {mode}")
     
     # 检查是否紧急停止
