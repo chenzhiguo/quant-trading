@@ -128,8 +128,8 @@ class DataFetcher:
         result = []
         for q in quotes:
             # Mock Data 兼容
-            prev_close = getattr(q, 'prev_close', q.last_done)
-            change = float(q.last_done) - float(prev_close) if prev_close else 0
+            prev_close = float(getattr(q, 'prev_close', q.last_done))
+            change = float(q.last_done) - prev_close if prev_close else 0
             change_pct = (change / prev_close * 100) if prev_close else 0
             
             result.append({

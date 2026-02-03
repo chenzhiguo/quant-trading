@@ -330,23 +330,25 @@ class RiskManager:
     
     def record_trade(self, trade: TradeRecord):
         """记录交易"""
-        # 更新每日统计
-        today = date.today().isoformat()
-        daily_stats = self._get_daily_stats(today)
-        daily_stats["trade_count"] += 1
-        
-        if trade.pnl is not None:
-            daily_stats["realized_pnl"] += trade.pnl
-        
-        if trade.side == "buy":
-            daily_stats["buy_value"] += trade.value
-        else:
-            daily_stats["sell_value"] += trade.value
-        
-        self._daily_stats[today] = daily_stats
+        # 更新每日统计（仅统计有效订单）
+        if trade.status not in ["rejected", "error", "cancelled"]:
+            today = date.today().isoformat()
+            daily_stats = self._get_daily_stats(today)
+            daily_stats["trade_count"] += 1
+            
+            if trade.pnl is not None:
+                daily_stats["realized_pnl"] += trade.pnl
+            
+            if trade.side == "buy":
+                daily_stats["buy_value"] += trade.value
+            else:
+                daily_stats["sell_value"] += trade.value
+            
+            self._daily_stats[today] = daily_stats
         
         # 更新最后下单时间
-        self._last_order_time[trade.symbol] = datetime.now()
+        if trade.status in ["submitted", "filled"]:
+            self._last_order_time[trade.symbol] = datetime.now()
         
         # 写入日志文件
         self._append_trade_log(trade)

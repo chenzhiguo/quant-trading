@@ -92,12 +92,21 @@ class Trader:
         if positions.channels:
             for channel in positions.channels:
                 for pos in channel.positions:
+                    # market_value 是持仓市值，用 market 字段可能是 Market 枚举
+                    # 正确字段应该是 market_val（市值）
+                    market_val = getattr(pos, 'market_val', None) or getattr(pos, 'market_value', None)
+                    if market_val is None:
+                        # 如果没有市值字段，用 cost_price * quantity 估算
+                        market_val = float(pos.cost_price) * int(pos.quantity)
+                    else:
+                        market_val = float(market_val)
+                    
                     result.append({
                         "symbol": pos.symbol,
                         "quantity": int(pos.quantity),
                         "available": int(pos.available_quantity),
                         "cost_price": float(pos.cost_price),
-                        "market_value": float(pos.market or 0),
+                        "market_value": market_val,
                     })
         return result
     

@@ -6,6 +6,18 @@
       "realized_pnl": 0.0,
       "buy_value": 60325.86,
       "sell_value": 0.0
+    },
+    "2026-01-29": {
+      "trade_count": 1,
+      "realized_pnl": 0.0,
+      "buy_value": 7086.240000000001,
+      "sell_value": 0.0
+    },
+    "2026-02-02": {
+      "trade_count": 2,
+      "realized_pnl": 0.0,
+      "buy_value": 12718.560000000001,
+      "sell_value": 0.0
     }
   },
   "position_stops": {
@@ -20,6 +32,14 @@
     "GOOGL.US": {
       "stop_loss": 317.8225,
       "take_profit": 384.73249999999996
+    },
+    "NVDA.US": {
+      "stop_loss": 181.944,
+      "take_profit": 220.248
+    },
+    "AAPL.US": {
+      "stop_loss": 251.72150000000002,
+      "take_profit": 304.7155
     }
   }
 }
