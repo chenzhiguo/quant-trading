@@ -35,6 +35,7 @@ from core.risk import RiskConfig, get_risk_manager
 from strategies.ma_cross import MACrossStrategy
 from strategies.momentum import MomentumStrategy
 from strategies.mean_reversion import MeanReversionStrategy
+from strategies.multi_factor import MultiFactorStrategy, MultiFactorConfig
 from strategies.small_cap_growth import SmallCapGrowthStrategy, create_small_cap_strategy
 from strategies.base import Signal, TradeSignal
 from config.watchlist import get_watchlist
@@ -60,6 +61,19 @@ def scan_signals(symbols: List[str], strategies: List) -> Tuple[List[TradeSignal
     fetcher = get_fetcher()
     buy_signals = []
     sell_signals = []
+
+    # 预先获取多因子评分（用于过滤买入信号）
+    print("   📊 获取多因子评分以进行质量过滤...")
+    score_map = {}
+    try:
+        stocks_data = fetcher.get_multi_factor_data(symbols)
+        mf_config = MultiFactorConfig(top_n=len(symbols))
+        mf_strategy = MultiFactorStrategy(mf_config)
+        ranked_stocks = mf_strategy.calculate_score(stocks_data)
+        score_map = {s['symbol']: s['total_score'] for s in ranked_stocks}
+        print(f"   ✅ 已获取 {len(score_map)} 只股票评分")
+    except Exception as e:
+        print(f"   ⚠️ 获取评分失败: {e} (将跳过评分过滤)")
     
     for symbol in symbols:
         try:
@@ -71,7 +85,11 @@ def scan_signals(symbols: List[str], strategies: List) -> Tuple[List[TradeSignal
                 signal = strategy.analyze(symbol, data)
                 
                 if signal.signal == Signal.BUY:
+                    # 附加评分信息到 reason
+                    score = score_map.get(symbol, 0)
+                    signal.reason += f" | 综合分: {score:.1f}"
                     buy_signals.append(signal)
+                    
                 elif signal.signal == Signal.SELL:
                     sell_signals.append(signal)
                     
@@ -174,18 +192,34 @@ def execute_signals(
     print("\n📈 处理买入信号...")
     buy_count = 0
     
+    import re
+
     for signal in buy_signals:
         if buy_count >= max_buy_orders:
             results["buy_skipped"].append({
                 "symbol": signal.symbol,
-                "reason": f"已达到单次最大买入数 ({max_buy_orders})"
+                "reason": f"已达到单次最大买入数 ({max_buy_orders})",
+                "details": signal.reason
             })
             continue
         
+        # 评分过滤
+        score_match = re.search(r"综合分: ([\d\.]+)", signal.reason)
+        if score_match:
+            score = float(score_match.group(1))
+            if score < 60:
+                results["buy_skipped"].append({
+                    "symbol": signal.symbol,
+                    "reason": f"评分不足 ({score:.1f} < 60)",
+                    "details": signal.reason
+                })
+                continue
+
         if signal.confidence < min_confidence:
             results["buy_skipped"].append({
                 "symbol": signal.symbol,
-                "reason": f"置信度过低 ({signal.confidence:.0%})"
+                "reason": f"置信度过低 ({signal.confidence:.0%})",
+                "details": signal.reason
             })
             continue
         
@@ -193,7 +227,8 @@ def execute_signals(
         if signal.symbol in held_symbols:
             results["buy_skipped"].append({
                 "symbol": signal.symbol,
-                "reason": "已持有该股票"
+                "reason": "已持有该股票",
+                "details": signal.reason
             })
             continue
         
@@ -250,13 +285,23 @@ def format_results(results: dict) -> str:
         lines.append(f"\n❌ 执行失败: {len(results['errors'])} 笔")
         for err in results["errors"]:
             lines.append(f"   {err['symbol']}: {err['error']}")
+            
+    # 详细列出跳过的买入信号（即评测报告）
+    if results["buy_skipped"]:
+        lines.append(f"\n⚠️ 观察/跳过 (评测报告): {len(results['buy_skipped'])} 笔")
+        # 按原因分组或直接列出
+        for item in results["buy_skipped"]:
+            lines.append(f"   • {item['symbol']}: {item['reason']}")
+            # 如果是评分不足，显示更多细节
+            # if "评分不足" in item['reason']:
+            #    lines.append(f"     └─ {item.get('details', '')}")
+
+    skipped_sell = len(results["sell_skipped"])
+    if skipped_sell > 0:
+        lines.append(f"\n⏭️ 卖出跳过: {skipped_sell} 笔 (原因: 置信度低或未持仓)")
     
-    skipped = len(results["buy_skipped"]) + len(results["sell_skipped"])
-    if skipped > 0:
-        lines.append(f"\n⏭️ 跳过: {skipped} 笔")
-    
-    if not any([results["buy_executed"], results["sell_executed"], results["errors"]]):
-        lines.append("\n📋 无交易执行")
+    if not any([results["buy_executed"], results["sell_executed"], results["errors"], results["buy_skipped"]]):
+        lines.append("\n📋 无信号")
     
     return "\n".join(lines)
 

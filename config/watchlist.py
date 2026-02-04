@@ -95,6 +95,11 @@ MONITOR_STOCKS = [
     "WMT.US",    # 沃尔玛 Walmart
     "GD.US",     # 通用动力 General Dynamics
     "TSM.US",    # 台积电 TSMC ADR
+    "RDDT.US",   # Reddit
+    "QCOM.US",   # 高通 Qualcomm
+    "WDC.US",    # 西部数据 (含Sandisk)
+    "STX.US",    # 希捷 Seagate
+    "NKE.US",    # 耐克 Nike
 ]
 
 # 杠杆ETF（高波动交易）
