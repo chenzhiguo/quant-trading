@@ -18,6 +18,12 @@
       "realized_pnl": 0.0,
       "buy_value": 12718.560000000001,
       "sell_value": 0.0
+    },
+    "2026-02-03": {
+      "trade_count": 2,
+      "realized_pnl": 0.0,
+      "buy_value": 3185.65,
+      "sell_value": 6667.4
     }
   },
   "position_stops": {
@@ -40,6 +46,10 @@
     "AAPL.US": {
       "stop_loss": 251.72150000000002,
       "take_profit": 304.7155
+    },
+    "AMD.US": {
+      "stop_loss": 232.7975,
+      "take_profit": 281.8075
     }
   }
 }

@@ -107,7 +107,7 @@ def scan_multi_factor(category: str = "us_tech", top_n: int = 10):
 
 def main():
     parser = argparse.ArgumentParser(description="多因子选股扫描")
-    parser.add_argument("--list", "-l", type=str, default="us_tech", help=f"股票池分类: {list(list_categories().keys())}")
+    parser.add_argument("--list", "-l", type=str, default="all", help=f"股票池分类: {list(list_categories().keys())}")
     parser.add_argument("--top", "-n", type=int, default=10, help="显示数量")
     
     args = parser.parse_args()

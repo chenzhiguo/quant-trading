@@ -34,6 +34,7 @@ from core.trader import get_trader
 from core.risk import RiskConfig, get_risk_manager
 from strategies.ma_cross import MACrossStrategy
 from strategies.momentum import MomentumStrategy
+from strategies.mean_reversion import MeanReversionStrategy
 from strategies.small_cap_growth import SmallCapGrowthStrategy, create_small_cap_strategy
 from strategies.base import Signal, TradeSignal
 from config.watchlist import get_watchlist
@@ -274,13 +275,13 @@ def main():
     )
     parser.add_argument(
         "--strategy", "-s",
-        choices=["all", "ma", "momentum", "smallcap"],
-        default="all",
-        help="使用的策略 (all, ma, momentum, smallcap)"
+        choices=["all", "ma", "momentum", "smallcap", "meanrev"],
+        default="meanrev",
+        help="使用的策略 (all, ma, momentum, smallcap, meanrev)"
     )
     parser.add_argument(
         "--watchlist", "-w",
-        default="us_tech",
+        default="all",
         help="自选股列表"
     )
     parser.add_argument(
@@ -328,6 +329,14 @@ def main():
         strategies.append(MomentumStrategy(lookback=20, rsi_period=14))
     if args.strategy in ["all", "smallcap"]:
         strategies.append(create_small_cap_strategy(top_n=10))
+    if args.strategy in ["all", "meanrev"]:
+        strategies.append(MeanReversionStrategy(
+            lookback=20,
+            min_drop=-10.0,
+            rsi_oversold=35,
+            ma_deviation=-5.0,
+            rsi_overbought=60,
+        ))
     
     print(f"📈 策略: {', '.join(s.name for s in strategies)}")
     

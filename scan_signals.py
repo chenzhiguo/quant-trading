@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.data import get_fetcher
 from strategies.ma_cross import MACrossStrategy
 from strategies.momentum import MomentumStrategy
+from strategies.mean_reversion import MeanReversionStrategy
 from strategies.base import Signal
 from config.watchlist import get_watchlist
 
@@ -39,14 +40,19 @@ def scan_all_signals(symbols: list = None) -> dict:
         }
     """
     if symbols is None:
-        symbols = get_watchlist("us_tech")
+        symbols = get_watchlist("all")
     
     fetcher = get_fetcher()
     
-    # 两个策略
+    # 使用均值回归策略（追跌不追涨）
     strategies = [
-        MACrossStrategy(short_period=5, long_period=20),
-        MomentumStrategy(lookback=20, rsi_period=14),
+        MeanReversionStrategy(
+            lookback=20,
+            min_drop=-10.0,
+            rsi_oversold=35,
+            ma_deviation=-5.0,
+            rsi_overbought=60,
+        ),
     ]
     
     all_signals = []

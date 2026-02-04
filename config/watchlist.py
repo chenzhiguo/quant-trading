@@ -30,15 +30,15 @@ US_AI = [
     "ARM.US",    # ARM Holdings
 ]
 
-# 港股科技
+# 港股科技 (暂时禁用)
 HK_TECH = [
-    "0700.HK",   # 腾讯
-    "9988.HK",   # 阿里巴巴
-    "9999.HK",   # 网易
-    "3690.HK",   # 美团
-    "9618.HK",   # 京东
-    "9888.HK",   # 百度
-    "1810.HK",   # 小米
+    # "0700.HK",   # 腾讯
+    # "9988.HK",   # 阿里巴巴
+    # "9999.HK",   # 网易
+    # "3690.HK",   # 美团
+    # "9618.HK",   # 京东
+    # "9888.HK",   # 百度
+    # "1810.HK",   # 小米
 ]
 
 # 中概股（美股上市的中国公司）
@@ -60,40 +60,54 @@ CN_ADR = [
     "TCOM.US",   # 携程
 ]
 
-# 港股互联网（扩展）
+# 港股互联网（扩展）(暂时禁用)
 HK_INTERNET = [
-    "0700.HK",   # 腾讯
-    "9988.HK",   # 阿里巴巴
-    "9999.HK",   # 网易
-    "3690.HK",   # 美团
-    "9618.HK",   # 京东
-    "9888.HK",   # 百度
-    "1810.HK",   # 小米
-    "9866.HK",   # 蔚来
-    "9868.HK",   # 小鹏汽车
-    "2015.HK",   # 理想汽车
-    "9626.HK",   # 哔哩哔哩
-    "1024.HK",   # 快手
-    "2382.HK",   # 舜宇光学
-    "0241.HK",   # 阿里健康
-    "6060.HK",   # 众安在线
-    "1833.HK",   # 平安好医生
-    "9961.HK",   # 携程
-    "9698.HK",   # 万国数据
+    # "0700.HK",   # 腾讯
+    # "9988.HK",   # 阿里巴巴
+    # "9999.HK",   # 网易
+    # "3690.HK",   # 美团
+    # "9618.HK",   # 京东
+    # "9888.HK",   # 百度
+    # "1810.HK",   # 小米
+    # "9866.HK",   # 蔚来
+    # "9868.HK",   # 小鹏汽车
+    # "2015.HK",   # 理想汽车
+    # "9626.HK",   # 哔哩哔哩
+    # "1024.HK",   # 快手
+    # "2382.HK",   # 舜宇光学
+    # "0241.HK",   # 阿里健康
+    # "6060.HK",   # 众安在线
+    # "1833.HK",   # 平安好医生
+    # "9961.HK",   # 携程
+    # "9698.HK",   # 万国数据
 ]
 
-# A股科技（沪深港通）
-A_TECH = [
-    "600519.SH",  # 贵州茅台（虽然不是科技，但波动大）
-    "300750.SZ",  # 宁德时代
-    "002594.SZ",  # 比亚迪
-    "000333.SZ",  # 美的集团
-    "601318.SH",  # 中国平安
-    "600036.SH",  # 招商银行
-    "002415.SZ",  # 海康威视
-    "300059.SZ",  # 东方财富
-    "002475.SZ",  # 立讯精密
-    "600900.SH",  # 长江电力
+# 个股监控（扩展分析范围）
+MONITOR_STOCKS = [
+    "ORCL.US",   # 甲骨文 Oracle
+    "NET.US",    # CloudFlare
+    "SAP.US",    # SAP
+    "FIG.US",    # Figma (请确认代码有效性)
+    "INTC.US",   # 英特尔 Intel
+    "ARM.US",    # ARM Holdings
+    "AVGO.US",   # 博通 Broadcom
+    "MU.US",     # 美光科技 Micron
+    "WMT.US",    # 沃尔玛 Walmart
+    "GD.US",     # 通用动力 General Dynamics
+    "TSM.US",    # 台积电 TSMC ADR
+]
+
+# 杠杆ETF（高波动交易）
+LEVERAGED_ETF = [
+    "QQQ.US",    # 纳斯达克100指数ETF
+    "YANG.US",   # 富时中国3倍做空ETF
+    "FXP.US",    # 2倍做空富时中国50 ETF
+    "TQQQ.US",   # 3倍做多纳指ETF
+    "SQQQ.US",   # 3倍做空纳指ETF
+    "SOXL.US",   # 半导体3倍做多ETF
+    "SOXS.US",   # 半导体3倍做空ETF
+    "GLL.US",    # 2倍做空黄金ETF
+    "TSLL.US",   # 1.5倍做多特斯拉ETF
 ]
 
 # 默认监控列表
@@ -109,9 +123,10 @@ def get_watchlist(category: str = "default") -> list:
         "hk_tech": HK_TECH,
         "hk_internet": HK_INTERNET,
         "cn_adr": CN_ADR,
-        "a_tech": A_TECH,
+        "monitor": MONITOR_STOCKS,
+        "etf": LEVERAGED_ETF,
         "china": list(set(HK_INTERNET + CN_ADR)),  # 所有中国公司
-        "all": list(set(US_TECH + US_AI + HK_INTERNET + CN_ADR)),
+        "all": list(set(US_TECH + US_AI + HK_INTERNET + CN_ADR + MONITOR_STOCKS + LEVERAGED_ETF)),
     }
     return watchlists.get(category, DEFAULT_WATCHLIST)
 
@@ -125,7 +140,8 @@ def list_categories() -> dict:
         "hk_tech": f"港股科技 ({len(HK_TECH)}只)",
         "hk_internet": f"港股互联网 ({len(HK_INTERNET)}只)",
         "cn_adr": f"中概股ADR ({len(CN_ADR)}只)",
-        "a_tech": f"A股科技 ({len(A_TECH)}只)",
+        "monitor": f"个股监控 ({len(MONITOR_STOCKS)}只)",
+        "etf": f"杠杆ETF ({len(LEVERAGED_ETF)}只)",
         "china": f"所有中国公司 ({len(set(HK_INTERNET + CN_ADR))}只)",
-        "all": f"全部 ({len(set(US_TECH + US_AI + HK_INTERNET + CN_ADR))}只)",
+        "all": f"全部 ({len(set(US_TECH + US_AI + HK_INTERNET + CN_ADR + MONITOR_STOCKS + LEVERAGED_ETF))}只)",
     }
