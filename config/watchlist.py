@@ -24,10 +24,49 @@ US_AI = [
     "GOOGL.US",  # 谷歌 (Gemini)
     "META.US",   # Meta (LLaMA)
     "PLTR.US",   # Palantir
-    "AI.US",     # C3.ai
-    "PATH.US",   # UiPath
+    "TSM.US",    # 台积电 (AI芯片制造)
+    "AVGO.US",   # 博通 (AI网络芯片)
     "SMCI.US",   # Super Micro (AI服务器)
     "ARM.US",    # ARM Holdings
+]
+
+# 美股核心护城河 (AI/互联网/软件) - 财务稳健 + 持续成长
+US_CORE_MOAT = [
+    # --- 基础设施 (铲子股) ---
+    "NVDA.US",   # 英伟达: GPU 垄断 + CUDA 生态 (绝对护城河)
+    "TSM.US",    # 台积电: 先进封装垄断 (无可替代)
+    "AVGO.US",   # 博通: 顶级网络芯片 + 软件高毛利 (现金牛)
+    "ASML.US",   # 阿斯麦: 光刻机垄断 (人类工业皇冠)
+    
+    # --- 云计算与平台 (地主) ---
+    "MSFT.US",   # 微软: Azure + Office + Copilot (最强B端生态)
+    "GOOGL.US",  # 谷歌: 搜索垄断 + TPU/DeepMind (最强AI底蕴)
+    "AMZN.US",   # 亚马逊: AWS 云龙头 + 电商物流壁垒
+    "META.US",   # Meta: 30亿用户社交图谱 + 广告印钞机
+    
+    # --- 关键软件 (SaaS 粘性) ---
+    "ORCL.US",   # 甲骨文: 数据库粘性 + 云增速 (老树发新芽)
+    "CRM.US",    # Salesforce: 客户关系数据垄断 (Agentforce)
+    "ADBE.US",   # Adobe: 创意工作流垄断 (Firefly AI)
+    "NOW.US",    # ServiceNow: 企业数字化工作流 (极高留存率)
+    "PLTR.US",   # Palantir: 军工/企业操作系统 (独特护城河)
+    
+    # --- 网络安全 (刚需) ---
+    "PANW.US",   # Palo Alto: 网安平台化龙头
+]
+
+# 大师共识精选 (Terry Smith + Pat Dorsey + Will Danoff)
+# 筛选标准: 高ROCE + 高转换成本 + 持续成长
+US_CONSENSUS = [
+    "MSFT.US",   # 微软 (全票通过: 质量+护城河+成长)
+    "CDNS.US",   # Cadence (EDA软件双寡头, 芯片行业的收税人)
+    "SNPS.US",   # Synopsys (EDA软件双寡头, 极高转换成本)
+    "ADBE.US",   # Adobe (创意垄断, 极佳的SaaS模式)
+    "NOW.US",    # ServiceNow (极高客户留存率, IT基础设施)
+    "GOOGL.US",  # 谷歌 (搜索网络效应, 现金流充沛)
+    "CRM.US",    # Salesforce (企业数据核心)
+    "ANET.US",   # Arista (数据中心网络, 软硬结合壁垒)
+    "INTU.US",   # Intuit (税务软件垄断, 美国中小企业刚需)
 ]
 
 # 港股科技 (暂时禁用)
@@ -125,6 +164,8 @@ def get_watchlist(category: str = "default") -> list:
         "default": DEFAULT_WATCHLIST,
         "us_tech": US_TECH,
         "us_ai": US_AI,
+        "us_moat": US_CORE_MOAT,
+        "us_consensus": US_CONSENSUS,  # 新增: 大师共识
         "hk_tech": HK_TECH,
         "hk_internet": HK_INTERNET,
         "cn_adr": CN_ADR,
@@ -142,6 +183,8 @@ def list_categories() -> dict:
         "default": f"默认列表 ({len(DEFAULT_WATCHLIST)}只)",
         "us_tech": f"美股科技 ({len(US_TECH)}只)",
         "us_ai": f"美股AI概念 ({len(US_AI)}只)",
+        "us_moat": f"核心护城河 ({len(US_CORE_MOAT)}只)",
+        "us_consensus": f"大师共识 ({len(US_CONSENSUS)}只)",
         "hk_tech": f"港股科技 ({len(HK_TECH)}只)",
         "hk_internet": f"港股互联网 ({len(HK_INTERNET)}只)",
         "cn_adr": f"中概股ADR ({len(CN_ADR)}只)",

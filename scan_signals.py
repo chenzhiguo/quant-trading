@@ -20,6 +20,7 @@ from core.data import get_fetcher
 from strategies.ma_cross import MACrossStrategy
 from strategies.momentum import MomentumStrategy
 from strategies.mean_reversion import MeanReversionStrategy
+from strategies.alpha101 import Alpha101Strategy
 from strategies.base import Signal
 from config.watchlist import get_watchlist
 
@@ -44,8 +45,12 @@ def scan_all_signals(symbols: list = None) -> dict:
     
     fetcher = get_fetcher()
     
-    # 使用均值回归策略（追跌不追涨）
+    # 配置策略组合
     strategies = [
+        # Alpha 101 周频策略 (核心)
+        Alpha101Strategy(period="W"),
+        
+        # 均值回归策略（辅助：追跌不追涨）
         MeanReversionStrategy(
             lookback=20,
             min_drop=-10.0,
@@ -59,7 +64,8 @@ def scan_all_signals(symbols: list = None) -> dict:
     
     for symbol in symbols:
         try:
-            data = fetcher.get_kline_df(symbol, days=50)
+            # 获取较长的历史数据以供周线重采样
+            data = fetcher.get_kline_df(symbol, days=200)
             if not data:
                 continue
             
