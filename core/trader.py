@@ -126,19 +126,11 @@ class Trader:
     ) -> dict:
         """
         提交订单（带风控检查）
-        
-        Args:
-            symbol: 股票代码
-            side: 买卖方向 ("buy" / "sell")
-            quantity: 数量
-            price: 价格（限价单必填）
-            order_type: 订单类型
-            skip_risk_check: 是否跳过风控检查（危险！）
-            set_stops: 买入时是否自动设置止损止盈
-        
-        Returns:
-            订单信息
         """
+        # 修正价格精度: 美股通常为 2 位小数
+        if price is not None:
+            price = round(price, 2)
+            
         order_value = quantity * (price or 0)
         
         order_info = {

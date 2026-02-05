@@ -137,6 +137,19 @@ def execute_signals(
     positions = trader.get_positions()
     held_symbols = {p["symbol"] for p in positions}
     
+    # 🕵️‍♂️ 检查今日订单（防止重复下单）
+    try:
+        today_orders = trader.get_today_orders()
+        for order in today_orders:
+            # 检查买入订单 (不论状态，只要今天买过或正在买，就暂时视为持有，避免频繁重复)
+            # 注意: side 可能是枚举，需要转字符串判断
+            side = str(order.side).upper()
+            if "BUY" in side:
+                held_symbols.add(order.symbol)
+                # print(f"   🚫 今日已买入/挂单: {order.symbol} (状态: {order.status})")
+    except Exception as e:
+        print(f"   ⚠️ 获取订单失败，仅使用持仓判断: {e}")
+
     # 处理卖出信号（优先处理，释放资金）
     print("\n📉 处理卖出信号...")
     for signal in sell_signals:
@@ -252,6 +265,7 @@ def execute_signals(
             
             if order.get("status") in ["SUBMITTED", "DRY_RUN"]:
                 results["buy_executed"].append(order)
+                held_symbols.add(signal.symbol)  # ✅ 立即标记为持有，防止同次循环重复买入
                 buy_count += 1
             else:
                 results["errors"].append({

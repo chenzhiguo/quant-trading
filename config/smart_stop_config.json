@@ -1,0 +1,13 @@
+{
+  "atr_period": 14,
+  "atr_multiplier": 2.5,
+  "min_stop_pct": 0.03,
+  "max_stop_pct": 0.15,
+  "use_close_only": true,
+  "close_tolerance_minutes": 30,
+  "market_benchmark": "SPY.US",
+  "market_correlation_threshold": 0.5,
+  "market_drop_buffer": 1.2,
+  "vote_threshold": 2,
+  "take_profit_pct": 0.15
+}
