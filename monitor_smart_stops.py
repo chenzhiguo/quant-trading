@@ -26,6 +26,7 @@ import os
 import sys
 import argparse
 import json
+import time
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -67,6 +68,19 @@ def load_smart_stop_config() -> SmartStopConfig:
     return SmartStopConfig()
 
 
+def retry_action(func, description: str, max_retries: int = 3, delay: int = 2):
+    """重试操作"""
+    for i in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            if i < max_retries - 1:
+                print(f"⚠️ {description}失败: {e}，正在重试 ({i+1}/{max_retries})...")
+                time.sleep(delay)
+            else:
+                raise e
+
+
 def monitor_and_execute(
     notify: bool = False, 
     report_only: bool = False,
@@ -86,7 +100,11 @@ def monitor_and_execute(
     smart_stop = get_smart_stop_manager(config=smart_config)
     
     # 获取持仓
-    positions = trader.get_positions()
+    try:
+        positions = retry_action(lambda: trader.get_positions(), description="获取持仓")
+    except Exception as e:
+        print(f"❌ 获取持仓失败: {e}")
+        return None, []
     
     if not positions:
         print("\n📋 当前无持仓")
@@ -95,10 +113,17 @@ def monitor_and_execute(
     print(f"\n📋 持仓数量: {len(positions)}")
     
     # 智能止损分析
-    results = smart_stop.scan_positions(
-        positions=positions,
-        force_close_check=force_close
-    )
+    try:
+        results = retry_action(
+            lambda: smart_stop.scan_positions(
+                positions=positions,
+                force_close_check=force_close
+            ),
+            description="智能止损分析"
+        )
+    except Exception as e:
+        print(f"❌ 智能止损分析失败: {e}")
+        return None, []
     
     # 生成报告
     report = smart_stop.generate_report(results)

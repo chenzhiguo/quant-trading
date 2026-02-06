@@ -1,5 +1,5 @@
 {
-  "max_trading_capital": 400000.0,
+  "max_trading_capital": 51300.0,
   "max_single_position_pct": 0.05,
   "max_total_position_pct": 0.80,
   "min_cash_reserve_pct": 0.20,

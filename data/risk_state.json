@@ -32,9 +32,9 @@
       "sell_value": 0.0
     },
     "2026-02-05": {
-      "trade_count": 4,
+      "trade_count": 6,
       "realized_pnl": 0.0,
-      "buy_value": 9049.5,
+      "buy_value": 15148.11,
       "sell_value": 9515.69
     }
   },
@@ -44,8 +44,8 @@
       "take_profit": 773.9155
     },
     "AMZN.US": {
-      "stop_loss": 232.446,
-      "take_profit": 281.382
+      "stop_loss": 211.8215,
+      "take_profit": 256.41549999999995
     },
     "GOOGL.US": {
       "stop_loss": 317.8225,
@@ -74,6 +74,10 @@
     "BIDU.US": {
       "stop_loss": 131.43249999999998,
       "take_profit": 159.1025
+    },
+    "WMT.US": {
+      "stop_loss": 121.6,
+      "take_profit": 147.2
     }
   }
 }

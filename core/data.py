@@ -125,6 +125,9 @@ class DataFetcher:
     def get_quote_with_change(self, symbols: list) -> list:
         """获取行情及涨跌幅"""
         quotes = self.get_realtime_quotes(symbols)
+        if not quotes:
+            return []
+            
         result = []
         for q in quotes:
             # Mock Data 兼容
