@@ -37,6 +37,7 @@ from strategies.momentum import MomentumStrategy
 from strategies.mean_reversion import MeanReversionStrategy
 from strategies.multi_factor import MultiFactorStrategy, MultiFactorConfig
 from strategies.small_cap_growth import SmallCapGrowthStrategy, create_small_cap_strategy
+from strategies.regime_switching import RegimeSwitchingStrategy
 from strategies.base import Signal, TradeSignal
 from config.watchlist import get_watchlist
 
@@ -334,13 +335,13 @@ def main():
     )
     parser.add_argument(
         "--strategy", "-s",
-        choices=["all", "ma", "momentum", "smallcap", "meanrev"],
-        default="meanrev",
-        help="使用的策略 (all, ma, momentum, smallcap, meanrev)"
+        choices=["all", "ma", "momentum", "smallcap", "meanrev", "regime"],
+        default="regime",
+        help="使用的策略 (all, ma, momentum, smallcap, meanrev, regime)"
     )
     parser.add_argument(
         "--watchlist", "-w",
-        default="all",
+        default="optimized",
         help="自选股列表"
     )
     parser.add_argument(
@@ -396,6 +397,8 @@ def main():
             ma_deviation=-5.0,
             rsi_overbought=60,
         ))
+    if args.strategy in ["all", "regime"]:
+        strategies.append(RegimeSwitchingStrategy())
     
     print(f"📈 策略: {', '.join(s.name for s in strategies)}")
     

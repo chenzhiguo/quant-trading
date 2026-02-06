@@ -1,5 +1,5 @@
 """
-智能止损模块 - 现代化止损策略
+智能止损模块 - 现代化止损策略 (支持自适应风控)
 
 三大核心策略:
 1. 波动率自适应止损 - 根据ATR动态设置止损幅度
@@ -7,10 +7,12 @@
 3. 相对大盘止损 - 如果大盘也跌，放宽止损
 
 组合决策: 三个策略投票，多数通过才触发止损
+新特性: 支持基于 Beta 值的自适应风控模式
 """
 import os
+import numpy as np
 from datetime import datetime, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple
 from enum import Enum
 
@@ -39,6 +41,7 @@ class SmartStopResult:
     votes: List[StopVote]
     vote_summary: str
     details: Dict
+    risk_mode: str = "standard" # fixed or atr_trailing
     
     @property
     def should_exit(self) -> bool:
@@ -67,7 +70,16 @@ class SmartStopConfig:
     vote_threshold: int = 2                 # 需要几票才触发止损 (共3票)
     
     # 止盈
-    take_profit_pct: float = 0.15           # 止盈线 15%
+    take_profit_pct: float = 0.15           # 默认止盈线 15% (将被自适应逻辑覆盖)
+    
+    # 自适应风控配置
+    enable_adaptive_risk: bool = True       # 启用自适应风控
+    high_volatility_threshold: float = 0.40 # 年化波动率阈值 (40%)
+    
+    # 通用风控参数 (统一使用 ATR + 追踪)
+    atr_multiplier: float = 3.0             # ATR 止损倍数 (替代 fixed_stop_pct)
+    trailing_start_pct: float = 0.05        # 浮盈 5% 开启追踪
+    trailing_stop_pct: float = 0.05         # 回撤 5% 离场
 
 
 class SmartStopManager:
@@ -77,7 +89,10 @@ class SmartStopManager:
         self.config = config or SmartStopConfig()
         self._fetcher = data_fetcher
         self._atr_cache: Dict[str, Tuple[float, datetime]] = {}  # symbol -> (atr, timestamp)
+        self._vol_cache: Dict[str, Tuple[float, datetime]] = {}  # symbol -> (volatility, timestamp)
         self._market_cache: Dict[str, Tuple[float, datetime]] = {}  # benchmark -> (change_pct, timestamp)
+        # 最高价缓存 (用于追踪止损) - 实际应用需持久化，这里简化为内存
+        self._high_water_mark: Dict[str, float] = {} 
     
     @property
     def fetcher(self):
@@ -86,18 +101,33 @@ class SmartStopManager:
             self._fetcher = get_fetcher()
         return self._fetcher
     
+    def calculate_volatility(self, symbol: str) -> float:
+        """计算年化波动率"""
+        if symbol in self._vol_cache:
+            cached_vol, cached_time = self._vol_cache[symbol]
+            if datetime.now() - cached_time < timedelta(days=1):
+                return cached_vol
+                
+        try:
+            candles = self.fetcher.get_kline_df(symbol, days=100)
+            if len(candles) < 30:
+                return 0.0
+            
+            closes = [c["close"] for c in candles]
+            returns = np.diff(closes) / closes[:-1]
+            volatility = np.std(returns) * np.sqrt(252)
+            
+            self._vol_cache[symbol] = (volatility, datetime.now())
+            return volatility
+        except Exception as e:
+            print(f"⚠️ 计算波动率失败 {symbol}: {e}")
+            return 0.0
+
     # ==================== 策略1: 波动率自适应止损 ====================
     
     def calculate_atr(self, symbol: str, period: int = None) -> float:
-        """
-        计算 ATR (Average True Range)
-        
-        ATR = 过去N天的 TR 平均值
-        TR = max(High-Low, |High-PrevClose|, |Low-PrevClose|)
-        """
         period = period or self.config.atr_period
         
-        # 检查缓存 (1小时有效)
         if symbol in self._atr_cache:
             cached_atr, cached_time = self._atr_cache[symbol]
             if datetime.now() - cached_time < timedelta(hours=1):
@@ -113,122 +143,79 @@ class SmartStopManager:
                 high = candles[i]["high"]
                 low = candles[i]["low"]
                 prev_close = candles[i-1]["close"]
-                
-                tr = max(
-                    high - low,
-                    abs(high - prev_close),
-                    abs(low - prev_close)
-                )
+                tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
                 tr_list.append(tr)
             
-            # 取最近 period 天的平均
             atr = sum(tr_list[-period:]) / period
-            
-            # 缓存
             self._atr_cache[symbol] = (atr, datetime.now())
-            
             return atr
-            
-        except Exception as e:
-            print(f"⚠️ 计算 {symbol} ATR 失败: {e}")
+        except Exception:
             return 0
     
-    def get_adaptive_stop_loss(self, symbol: str, cost_price: float) -> float:
-        """
-        根据 ATR 计算自适应止损价
-        
-        止损价 = 成本价 - ATR * 倍数
-        受 min/max_stop_pct 约束
-        """
-        atr = self.calculate_atr(symbol)
-        
-        if atr <= 0:
-            # 无法计算 ATR，使用默认 5%
-            return cost_price * (1 - 0.05)
-        
-        # ATR 止损距离
-        atr_stop_distance = atr * self.config.atr_multiplier
-        atr_stop_pct = atr_stop_distance / cost_price
-        
-        # 约束在 min/max 范围内
-        stop_pct = max(self.config.min_stop_pct, min(self.config.max_stop_pct, atr_stop_pct))
-        
-        return cost_price * (1 - stop_pct)
-    
-    def vote_atr_stop(
+    def vote_adaptive_risk(
         self, 
         symbol: str, 
         cost_price: float, 
         current_price: float
     ) -> StopVote:
         """
-        策略1投票: ATR自适应止损
+        自适应风控核心逻辑 (统一使用 ATR + 追踪止盈)
         """
+        if not self.config.enable_adaptive_risk:
+            return StopVote("自适应风控", StopDecision.HOLD, "未启用", 0)
+
+        # 1. 基础数据
+        volatility = self.calculate_volatility(symbol)
         atr = self.calculate_atr(symbol)
-        adaptive_stop = self.get_adaptive_stop_loss(symbol, cost_price)
-        adaptive_stop_pct = (cost_price - adaptive_stop) / cost_price
         
-        # 当前亏损
-        pnl_pct = (current_price - cost_price) / cost_price
+        # 更新最高价 (水位线)
+        if symbol not in self._high_water_mark or current_price > self._high_water_mark[symbol]:
+            self._high_water_mark[symbol] = current_price
         
-        # 止盈检查
-        if pnl_pct >= self.config.take_profit_pct:
+        high_price = self._high_water_mark[symbol]
+        
+        # 2. 追踪止盈 (统一应用)
+        # 只有当浮盈达到 trailing_start_pct 时才激活
+        highest_pnl = (high_price - cost_price) / cost_price
+        drawdown = (high_price - current_price) / high_price
+        
+        if highest_pnl >= self.config.trailing_start_pct:
+            if drawdown >= self.config.trailing_stop_pct:
+                return StopVote(
+                    strategy="自适应(追踪)",
+                    decision=StopDecision.TAKE_PROFIT,
+                    reason=f"追踪止盈触发 (最高盈:{highest_pnl:.1%} 回撤:{drawdown:.1%})",
+                    confidence=1.0
+                )
+        
+        # 3. ATR 止损 (统一应用)
+        # 止损线 = 成本价 - ATR * 倍数
+        stop_price = cost_price - (atr * self.config.atr_multiplier)
+        if current_price < stop_price:
             return StopVote(
-                strategy="ATR自适应",
-                decision=StopDecision.TAKE_PROFIT,
-                reason=f"盈利 {pnl_pct:.1%} >= 止盈线 {self.config.take_profit_pct:.0%}",
+                strategy="自适应(ATR)",
+                decision=StopDecision.STOP_LOSS,
+                reason=f"触及ATR止损线 {stop_price:.2f} (ATR={atr:.2f})",
                 confidence=0.9
             )
-        
-        # 止损检查
-        if current_price <= adaptive_stop:
-            return StopVote(
-                strategy="ATR自适应",
-                decision=StopDecision.STOP_LOSS,
-                reason=f"价格 {current_price:.2f} <= ATR止损线 {adaptive_stop:.2f} (ATR={atr:.2f}, 止损幅度={adaptive_stop_pct:.1%})",
-                confidence=0.8
-            )
-        
+            
         return StopVote(
-            strategy="ATR自适应",
+            strategy="自适应(风控)",
             decision=StopDecision.HOLD,
-            reason=f"价格 {current_price:.2f} > ATR止损线 {adaptive_stop:.2f}",
-            confidence=0.8
+            reason=f"状态安全 (ATR止损:{stop_price:.2f}, 波动率:{volatility:.1%})",
+            confidence=0.5
         )
-    
-    # ==================== 策略2: 收盘价止损 ====================
+
+    # ==================== 策略2: 收盘价止损 (保留作为辅助) ====================
     
     def is_near_market_close(self) -> bool:
-        """
-        判断当前是否接近美股收盘时间
-        
-        美股收盘: 北京时间 4:00 (夏令时) 或 5:00 (冬令时)
-        这里简化处理，认为 3:30-5:30 都是"收盘附近"
-        """
         now = datetime.now()
-        # 北京时间
         hour = now.hour
         minute = now.minute
-        
-        # 3:30 - 5:30 视为收盘时段
-        if hour == 3 and minute >= 30:
-            return True
-        if hour == 4:
-            return True
-        if hour == 5 and minute <= 30:
-            return True
-        
+        if hour == 3 and minute >= 30: return True
+        if hour == 4: return True
+        if hour == 5 and minute <= 30: return True
         return False
-    
-    def get_last_close_price(self, symbol: str) -> Optional[float]:
-        """获取最近一个交易日的收盘价"""
-        try:
-            candles = self.fetcher.get_kline_df(symbol, days=5)
-            if candles:
-                return candles[-1]["close"]
-        except Exception:
-            pass
-        return None
     
     def vote_close_only(
         self,
@@ -237,131 +224,50 @@ class SmartStopManager:
         current_price: float,
         force_check: bool = False
     ) -> StopVote:
-        """
-        策略2投票: 收盘价止损
-        
-        只在收盘时才判断，盘中不触发止损
-        force_check=True 可以强制检查（用于收盘后回顾）
-        """
         is_close_time = self.is_near_market_close() or force_check
         
         if not is_close_time and self.config.use_close_only:
-            return StopVote(
-                strategy="收盘价止损",
-                decision=StopDecision.HOLD,
-                reason="非收盘时段，暂不判断止损",
-                confidence=1.0
-            )
+            return StopVote("收盘价止损", StopDecision.HOLD, "非收盘时段", 1.0)
         
-        # 使用简单的固定比例（因为 ATR 策略已经做了动态）
-        # 这里用 8% 作为收盘价止损的基准
-        close_stop_pct = 0.08
-        close_stop_price = cost_price * (1 - close_stop_pct)
-        
-        pnl_pct = (current_price - cost_price) / cost_price
-        
-        # 止盈
-        if pnl_pct >= self.config.take_profit_pct:
-            return StopVote(
-                strategy="收盘价止损",
-                decision=StopDecision.TAKE_PROFIT,
-                reason=f"收盘盈利 {pnl_pct:.1%} >= 止盈线",
-                confidence=0.9
-            )
-        
-        # 止损
-        if current_price <= close_stop_price:
-            return StopVote(
-                strategy="收盘价止损",
-                decision=StopDecision.STOP_LOSS,
-                reason=f"收盘价 {current_price:.2f} 低于止损线 {close_stop_price:.2f} (跌幅 {-pnl_pct:.1%})",
-                confidence=0.85
-            )
-        
-        return StopVote(
-            strategy="收盘价止损",
-            decision=StopDecision.HOLD,
-            reason=f"收盘价 {current_price:.2f} 在安全范围内 (止损线 {close_stop_price:.2f})",
-            confidence=0.85
-        )
+        # 兼容旧逻辑，使用固定8%作为硬止损
+        stop_price = cost_price * (1 - 0.08)
+        if current_price <= stop_price:
+            return StopVote("收盘价止损", StopDecision.STOP_LOSS, f"收盘破位 {stop_price:.2f}", 0.85)
+            
+        return StopVote("收盘价止损", StopDecision.HOLD, "安全", 0.5)
     
-    # ==================== 策略3: 相对大盘止损 ====================
+    # ==================== 策略3: 相对大盘止损 (保留作为辅助) ====================
     
     def get_market_change(self) -> float:
-        """
-        获取大盘今日涨跌幅
-        """
-        # 检查缓存 (5分钟有效)
         benchmark = self.config.market_benchmark
         if benchmark in self._market_cache:
-            cached_change, cached_time = self._market_cache[benchmark]
-            if datetime.now() - cached_time < timedelta(minutes=5):
-                return cached_change
-        
+            cached, time = self._market_cache[benchmark]
+            if datetime.now() - time < timedelta(minutes=5): return cached
         try:
             quotes = self.fetcher.get_quote_with_change([benchmark])
             if quotes:
-                change_pct = quotes[0]["change_pct"] / 100  # 转为小数
-                self._market_cache[benchmark] = (change_pct, datetime.now())
-                return change_pct
-        except Exception as e:
-            print(f"⚠️ 获取大盘行情失败: {e}")
-        
+                change = quotes[0]["change_pct"] / 100
+                self._market_cache[benchmark] = (change, datetime.now())
+                return change
+        except Exception:
+            pass
         return 0
     
-    def vote_relative_market(
-        self,
-        symbol: str,
-        cost_price: float,
-        current_price: float
-    ) -> StopVote:
-        """
-        策略3投票: 相对大盘止损
-        
-        如果大盘也在跌，个股跌幅可以放宽
-        例如: 大盘跌3%，个股跌5%，相对只跌了2%，不触发止损
-        """
+    def vote_relative_market(self, symbol: str, cost_price: float, current_price: float) -> StopVote:
         market_change = self.get_market_change()
         stock_change = (current_price - cost_price) / cost_price
-        
-        # 相对大盘的超额跌幅
-        # 如果大盘跌 -3%，个股跌 -5%，超额跌幅 = -5% - (-3%) = -2%
         excess_drop = stock_change - market_change
         
-        # 动态止损线: 基础5% + 大盘跌幅的缓冲
         base_stop = 0.05
         if market_change < 0:
-            # 大盘下跌时，放宽止损
-            buffer = abs(market_change) * self.config.market_drop_buffer
-            adjusted_stop = base_stop + buffer
-            adjusted_stop = min(adjusted_stop, self.config.max_stop_pct)  # 最大15%
+            adjusted_stop = base_stop + abs(market_change) * self.config.market_drop_buffer
         else:
             adjusted_stop = base_stop
-        
-        # 止盈
-        if stock_change >= self.config.take_profit_pct:
-            return StopVote(
-                strategy="相对大盘",
-                decision=StopDecision.TAKE_PROFIT,
-                reason=f"盈利 {stock_change:.1%} >= 止盈线",
-                confidence=0.9
-            )
-        
-        # 止损判断: 用超额跌幅和调整后的止损线比较
+            
         if excess_drop < -adjusted_stop:
-            return StopVote(
-                strategy="相对大盘",
-                decision=StopDecision.STOP_LOSS,
-                reason=f"超额跌幅 {excess_drop:.1%} 超过调整止损线 -{adjusted_stop:.1%} (大盘 {market_change:+.1%})",
-                confidence=0.75
-            )
-        
-        return StopVote(
-            strategy="相对大盘",
-            decision=StopDecision.HOLD,
-            reason=f"超额跌幅 {excess_drop:.1%} 在容忍范围内 (大盘 {market_change:+.1%}, 调整止损 -{adjusted_stop:.1%})",
-            confidence=0.75
-        )
+            return StopVote("相对大盘", StopDecision.STOP_LOSS, f"超额跌幅 {excess_drop:.1%}", 0.75)
+            
+        return StopVote("相对大盘", StopDecision.HOLD, "正常", 0.5)
     
     # ==================== 组合决策 ====================
     
@@ -373,41 +279,35 @@ class SmartStopManager:
         force_close_check: bool = False
     ) -> SmartStopResult:
         """
-        综合三个策略进行投票决策
-        
-        Args:
-            symbol: 股票代码
-            cost_price: 成本价
-            current_price: 当前价
-            force_close_check: 强制按收盘价逻辑判断
-        
-        Returns:
-            SmartStopResult 包含投票详情和最终决策
+        综合决策
         """
-        # 收集三个策略的投票
-        votes = [
-            self.vote_atr_stop(symbol, cost_price, current_price),
-            self.vote_close_only(symbol, cost_price, current_price, force_close_check),
-            self.vote_relative_market(symbol, cost_price, current_price),
-        ]
+        # 1. 自适应风控投票 (权重最高)
+        adaptive_vote = self.vote_adaptive_risk(symbol, cost_price, current_price)
         
-        # 统计投票
-        stop_votes = sum(1 for v in votes if v.decision == StopDecision.STOP_LOSS)
-        profit_votes = sum(1 for v in votes if v.decision == StopDecision.TAKE_PROFIT)
-        hold_votes = sum(1 for v in votes if v.decision == StopDecision.HOLD)
+        # 2. 其他辅助投票
+        close_vote = self.vote_close_only(symbol, cost_price, current_price, force_close_check)
+        relative_vote = self.vote_relative_market(symbol, cost_price, current_price)
         
-        # 决策逻辑
-        if profit_votes >= self.config.vote_threshold:
-            final_decision = StopDecision.TAKE_PROFIT
-        elif stop_votes >= self.config.vote_threshold:
-            final_decision = StopDecision.STOP_LOSS
+        votes = [adaptive_vote, close_vote, relative_vote]
+        
+        # 决策逻辑: 自适应风控有一票否决权 (如果是止损/止盈)
+        if adaptive_vote.decision != StopDecision.HOLD:
+            final_decision = adaptive_vote.decision
         else:
-            final_decision = StopDecision.HOLD
+            # 如果自适应觉得没问题，再看其他策略是否强烈建议止损 (且是收盘时)
+            stop_votes = sum(1 for v in votes if v.decision == StopDecision.STOP_LOSS)
+            if stop_votes >= 2 and (self.is_near_market_close() or force_close_check):
+                final_decision = StopDecision.STOP_LOSS
+            else:
+                final_decision = StopDecision.HOLD
         
-        # 生成摘要
-        vote_summary = f"止损:{stop_votes} | 止盈:{profit_votes} | 持有:{hold_votes}"
-        
+        vote_summary = f"主策略:{adaptive_vote.decision.value} | 辅助:{close_vote.decision.value}/{relative_vote.decision.value}"
         pnl_pct = (current_price - cost_price) / cost_price
+        
+        # 提取模式描述
+        vol = self.calculate_volatility(symbol)
+        vol_tag = "高波" if vol > self.config.high_volatility_threshold else "稳健"
+        mode_desc = f"{vol_tag}(ATR+追踪)"
         
         return SmartStopResult(
             symbol=symbol,
@@ -415,13 +315,12 @@ class SmartStopManager:
             votes=votes,
             vote_summary=vote_summary,
             details={
-                "cost_price": cost_price,
-                "current_price": current_price,
                 "pnl_pct": pnl_pct,
-                "atr": self.calculate_atr(symbol),
-                "atr_stop": self.get_adaptive_stop_loss(symbol, cost_price),
-                "market_change": self.get_market_change(),
-            }
+                "volatility": vol,
+                "mode": mode_desc,
+                "current_price": current_price
+            },
+            risk_mode=mode_desc
         )
     
     def scan_positions(
@@ -430,19 +329,7 @@ class SmartStopManager:
         quotes: Dict[str, float] = None,
         force_close_check: bool = False
     ) -> List[SmartStopResult]:
-        """
-        扫描所有持仓，返回需要操作的列表
-        
-        Args:
-            positions: 持仓列表 [{"symbol": "AAPL.US", "cost_price": 150, "quantity": 10}, ...]
-            quotes: 实时报价 {symbol: price}
-            force_close_check: 强制按收盘价逻辑
-        
-        Returns:
-            需要止损/止盈的持仓列表
-        """
         if quotes is None:
-            # 获取报价
             symbols = [p["symbol"] for p in positions]
             quote_list = self.fetcher.get_quote_with_change(symbols)
             quotes = {q["symbol"]: q["price"] for q in quote_list}
@@ -453,78 +340,47 @@ class SmartStopManager:
             cost_price = pos["cost_price"]
             current_price = quotes.get(symbol, 0)
             
-            if current_price <= 0:
-                continue
+            if current_price <= 0: continue
             
-            result = self.evaluate(
-                symbol=symbol,
-                cost_price=cost_price,
-                current_price=current_price,
-                force_close_check=force_close_check
-            )
-            
+            result = self.evaluate(symbol, cost_price, current_price, force_close_check)
             results.append(result)
         
         return results
     
     def generate_report(self, results: List[SmartStopResult]) -> str:
-        """生成智能止损报告"""
         lines = []
         lines.append("=" * 60)
-        lines.append(f"🧠 智能止损分析报告 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"🧠 智能止损分析报告 (自适应版) - {datetime.now().strftime('%H:%M:%S')}")
         lines.append("=" * 60)
         
-        # 大盘行情
-        market_change = self.get_market_change()
-        lines.append(f"\n📊 大盘 ({self.config.market_benchmark}): {market_change:+.2%}")
-        
-        # 是否收盘时段
-        if self.is_near_market_close():
-            lines.append("⏰ 当前为收盘时段，收盘价止损策略生效")
-        else:
-            lines.append("⏰ 非收盘时段，收盘价止损策略暂不生效")
-        
-        lines.append("")
-        
-        # 需要操作的持仓
         exit_results = [r for r in results if r.should_exit]
         hold_results = [r for r in results if not r.should_exit]
         
         if exit_results:
             lines.append("🚨 需要操作:")
             for r in exit_results:
-                emoji = "🔴" if r.final_decision == StopDecision.STOP_LOSS else "🟢"
                 action = "止损" if r.final_decision == StopDecision.STOP_LOSS else "止盈"
-                pnl_pct = r.details["pnl_pct"]
-                lines.append(f"  {emoji} {r.symbol} [{action}] 盈亏:{pnl_pct:+.1%} | {r.vote_summary}")
+                emoji = "🔴" if action == "止损" else "🟢"
+                lines.append(f"  {emoji} {r.symbol} [{action}] 盈亏:{r.details['pnl_pct']:+.1%} ({r.risk_mode})")
                 for v in r.votes:
-                    vote_emoji = "✓" if v.decision != StopDecision.HOLD else "✗"
-                    lines.append(f"      {vote_emoji} {v.strategy}: {v.reason}")
+                    if v.decision != StopDecision.HOLD:
+                        lines.append(f"      👉 {v.reason}")
         else:
             lines.append("✅ 无需操作")
         
-        lines.append("")
-        
-        # 安全持仓
         if hold_results:
-            lines.append("📋 安全持仓:")
+            lines.append("\n📋 持仓监控:")
             for r in hold_results:
-                pnl_pct = r.details["pnl_pct"]
-                atr_stop = r.details["atr_stop"]
-                lines.append(f"  🟢 {r.symbol} 盈亏:{pnl_pct:+.1%} | ATR止损线:{atr_stop:.2f} | {r.vote_summary}")
+                vol = r.details.get('volatility', 0)
+                lines.append(f"  🟢 {r.symbol} 盈亏:{r.details['pnl_pct']:+.1%} | 波动率:{vol:.1%} | 模式:{r.risk_mode}")
         
-        lines.append("")
         lines.append("=" * 60)
-        
         return "\n".join(lines)
 
 
-# 单例
 _smart_stop_manager: Optional[SmartStopManager] = None
 
-
 def get_smart_stop_manager(config: SmartStopConfig = None) -> SmartStopManager:
-    """获取智能止损管理器单例"""
     global _smart_stop_manager
     if _smart_stop_manager is None:
         _smart_stop_manager = SmartStopManager(config=config)

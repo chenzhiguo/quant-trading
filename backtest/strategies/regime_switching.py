@@ -11,12 +11,20 @@ class BT_RegimeSwitchingStrategy(bt.Strategy):
     """
     params = (
         ('adx_period', 14),
-        ('adx_threshold', 25),
+        ('adx_threshold', 25), # 旧参数：ADX 阈值 25
+        ('adx_wait_threshold', 25), # 旧参数：ADX 25 以下即为震荡，无观望区
         ('alpha_period', 10),
         ('rsi_period', 14),
         ('rsi_oversold', 30),
         ('rsi_overbought', 70),
         ('ma_period', 20),
+        
+        # === 旧参数：无追踪止盈，可能使用固定止损 ===
+        ('atr_period', 14),
+        ('atr_multiplier', 3.0),      # ATR 保持 3.0 以便对比策略层面的差异
+        ('trailing_start_pct', 99.0),  # 禁用追踪止盈 (设为很大)
+        ('trailing_stop_pct', 0.05),
+        
         ('printlog', True),
     )
 
@@ -39,18 +47,57 @@ class BT_RegimeSwitchingStrategy(bt.Strategy):
         self.rsi = bt.indicators.RSI(self.datas[0], period=self.params.rsi_period)
         self.sma = bt.indicators.SimpleMovingAverage(self.datas[0], period=self.params.ma_period)
         
+        # 4. ATR (智能止损)
+        self.atr = bt.indicators.ATR(self.datas[0], period=self.params.atr_period)
+        
         self.regime = None # 当前状态记录
+        self.stop_price = None # 当前止损价
+        self.highest_price = None # 持仓期间最高价 (用于追踪止损)
 
     def next(self):
         current_adx = self.adx[0]
         
         # ----------------------------------------
+        # 0. 风控检查
+        # ----------------------------------------
+        if self.position:
+            cost_price = self.position.price
+            current_price = self.dataclose[0]
+            pnl_pct = (current_price - cost_price) / cost_price
+            
+            # 统一使用 ATR 基础止损 + 追踪止盈
+            # 更新最高价
+            if self.highest_price is None or current_price > self.highest_price:
+                self.highest_price = current_price
+            
+            # 1. 追踪止盈 (优先) - 只有当浮盈达到一定比例才开启
+            if self.highest_price:
+                highest_pnl = (self.highest_price - cost_price) / cost_price
+                if highest_pnl >= self.params.trailing_start_pct:
+                    # 计算相对于最高价的回撤
+                    drawdown = (self.highest_price - current_price) / self.highest_price
+                    
+                    if drawdown >= self.params.trailing_stop_pct:
+                        self.log(f'🛡️ TRAILING STOP (High: {self.highest_price:.2f}, Drawdown: {drawdown:.2%})')
+                        self.close()
+                        return
+
+            # 2. ATR 基础止损 (保底)
+            # 确保 self.stop_price 已经设置 (即买入操作已经完成)
+            if self.stop_price and current_price < self.stop_price:
+                self.log(f'🛑 ATR STOP TRIGGERED @ {current_price:.2f} (Stop: {self.stop_price:.2f})')
+                self.close()
+                return
+
+        # ----------------------------------------
         # 状态判定
         # ----------------------------------------
         if current_adx > self.params.adx_threshold:
             current_regime = 'TREND'
-        else:
+        elif current_adx < self.params.adx_wait_threshold:
             current_regime = 'RANGE'
+        else: # ADX 在 adx_wait_threshold 和 adx_threshold 之间
+            current_regime = 'WAIT'
             
         # 状态切换日志
         if current_regime != self.regime:
@@ -61,6 +108,14 @@ class BT_RegimeSwitchingStrategy(bt.Strategy):
         # 策略执行
         # ----------------------------------------
         
+        # 不在观望区域进行交易
+        if current_regime == 'WAIT':
+            if self.position:
+                self.log(f'⏸️ WAIT REGIME, HOLDING POSITION (ADX={current_adx:.1f})')
+            else:
+                self.log(f'⏸️ WAIT REGIME, NO TRADING (ADX={current_adx:.1f})')
+            return # 在观望区域直接返回，不执行交易逻辑
+            
         # === 场景 A: 强趋势 (跑 Alpha 101) ===
         if current_regime == 'TREND':
             # Alpha#101 计算
@@ -97,5 +152,15 @@ class BT_RegimeSwitchingStrategy(bt.Strategy):
         if order.status in [order.Completed]:
             if order.isbuy():
                 self.log(f'>>> EXECUTED BUY  @ {order.executed.price:.2f}')
+                self.highest_price = order.executed.price
+                
+                # 设置 ATR 止损线
+                atr_value = self.atr[0]
+                stop_dist = atr_value * self.params.atr_multiplier
+                self.stop_price = order.executed.price - stop_dist
+                self.log(f'🛡️ ATR Stop Set: {self.stop_price:.2f} (Dist: {stop_dist:.2f})')
+                
             elif order.issell():
                 self.log(f'>>> EXECUTED SELL @ {order.executed.price:.2f}')
+                self.stop_price = None
+                self.highest_price = None

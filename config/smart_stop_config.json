@@ -1,6 +1,6 @@
 {
   "atr_period": 14,
-  "atr_multiplier": 2.5,
+  "atr_multiplier": 3.0,
   "min_stop_pct": 0.03,
   "max_stop_pct": 0.15,
   "use_close_only": true,
@@ -9,5 +9,9 @@
   "market_correlation_threshold": 0.5,
   "market_drop_buffer": 1.2,
   "vote_threshold": 2,
-  "take_profit_pct": 0.15
+  "take_profit_pct": 0.15,
+  "enable_adaptive_risk": true,
+  "high_volatility_threshold": 0.40,
+  "trailing_start_pct": 0.05,
+  "trailing_stop_pct": 0.05
 }

@@ -4,12 +4,12 @@
 
 结合两个维度：
 1. MultiFactor 评分 → 股票质量（价值+动量+质量）
-2. MeanReversion 信号 → 买入时机（超跌抄底）
+2. Trade Signals → 买入时机（Regime Switching + Mean Reversion）
 
 输出：
-- 🌟 优质抄底：高评分 + 超跌信号（最佳机会）
-- 🟢 普通抄底：有信号但评分一般
-- 📊 优质观望：评分高但未超跌，等机会
+- 🌟 优质信号：高评分 + 强力信号（最佳机会）
+- 🟢 普通信号：有信号但评分一般
+- 📊 优质观望：评分高但无信号，等机会
 """
 import os
 import sys
@@ -23,6 +23,7 @@ load_dotenv()
 from core.data import get_fetcher
 from strategies.mean_reversion import MeanReversionStrategy
 from strategies.multi_factor import MultiFactorStrategy, MultiFactorConfig
+from strategies.regime_switching import RegimeSwitchingStrategy
 from strategies.base import Signal
 from config.watchlist import get_watchlist
 
@@ -55,8 +56,10 @@ def scan_combined(category: str = "all", top_n: int = 30):
         print(f"   ❌ 多因子评分失败: {e}")
         score_map = {}
     
-    # ========== 2. 均值回归信号 ==========
-    print("📉 扫描均值回归信号...")
+    # ========== 2. 策略信号扫描 (Regime + MeanReversion) ==========
+    print("📉 扫描交易信号...")
+    
+    # 策略 1: 均值回归 (抄底)
     mr_strategy = MeanReversionStrategy(
         lookback=20,
         min_drop=-10.0,
@@ -65,24 +68,48 @@ def scan_combined(category: str = "all", top_n: int = 30):
         rsi_overbought=60,
     )
     
+    # 策略 2: 趋势切换 (趋势跟踪 + 震荡)
+    rs_strategy = RegimeSwitchingStrategy()
+    
     buy_signals = []
     sell_signals = []
-    hold_stocks = []
     
     for symbol in symbols:
         try:
-            data = fetcher.get_kline_df(symbol, days=50)
-            if not data:
+            data = fetcher.get_kline_df(symbol, days=100) # 增加天数以计算ADX
+            if not data or len(data) < 50:
                 continue
             
-            signal = mr_strategy.analyze(symbol, data)
+            # 运行两个策略
+            sig_mr = mr_strategy.analyze(symbol, data)
+            sig_rs = rs_strategy.analyze(symbol, data)
             
-            if signal.signal == Signal.BUY:
-                buy_signals.append(signal)
-            elif signal.signal == Signal.SELL:
-                sell_signals.append(signal)
-            else:
-                hold_stocks.append(signal)
+            # 优先采纳 Regime Switching 的信号 (因为它更全面)
+            # 如果两个都有买入信号，合并置信度
+            
+            final_signal = None
+            
+            if sig_rs.signal == Signal.BUY:
+                final_signal = sig_rs
+                # 如果均值回归也提示买入，增加权重
+                if sig_mr.signal == Signal.BUY:
+                    final_signal.confidence = min(0.99, final_signal.confidence + 0.2)
+                    final_signal.reason += " & MR Confirm"
+            
+            elif sig_mr.signal == Signal.BUY:
+                final_signal = sig_mr
+            
+            # 卖出信号逻辑同理
+            elif sig_rs.signal == Signal.SELL:
+                final_signal = sig_rs
+            elif sig_mr.signal == Signal.SELL:
+                final_signal = sig_mr
+                
+            if final_signal:
+                if final_signal.signal == Signal.BUY:
+                    buy_signals.append(final_signal)
+                elif final_signal.signal == Signal.SELL:
+                    sell_signals.append(final_signal)
                 
         except Exception as e:
             pass
@@ -93,8 +120,8 @@ def scan_combined(category: str = "all", top_n: int = 30):
     print("🔗 组合分析...\n")
     
     # 分类结果
-    premium_buys = []    # 🌟 优质抄底：高评分 + 买入信号
-    normal_buys = []     # 🟢 普通抄底：买入信号但评分一般
+    premium_buys = []    # 🌟 优质信号：高评分 + 买入信号
+    normal_buys = []     # 🟢 普通信号：买入信号但评分一般
     premium_watch = []   # 📊 优质观望：高评分但无信号
     
     SCORE_THRESHOLD = 60  # 多因子评分阈值
@@ -107,12 +134,12 @@ def scan_combined(category: str = "all", top_n: int = 30):
             'symbol': signal.symbol,
             'price': signal.price,
             'mf_score': mf_score,
-            'mr_confidence': signal.confidence,
-            'mr_reason': signal.reason,
+            'confidence': signal.confidence,
+            'reason': signal.reason,
             'pe': stock_info.get('pe_ttm', 0),
             'roe': stock_info.get('roe', 0),
             'mom_12m': stock_info.get('mom_12m', 0),
-            # 综合评分 = 多因子 * 0.5 + 均值回归置信度 * 50
+            # 综合评分
             'combined_score': mf_score * 0.5 + signal.confidence * 50
         }
         
@@ -139,30 +166,30 @@ def scan_combined(category: str = "all", top_n: int = 30):
     
     # 排序
     premium_buys.sort(key=lambda x: -x['combined_score'])
-    normal_buys.sort(key=lambda x: -x['mr_confidence'])
+    normal_buys.sort(key=lambda x: -x['confidence'])
     premium_watch.sort(key=lambda x: -x['mf_score'])
     
     # ========== 4. 输出结果 ==========
     
     # 🌟 优质抄底
-    print("🌟 【优质抄底】高评分 + 超跌信号 (最佳机会)")
+    print("🌟 【优质信号】高评分 + 强力信号")
     print("-" * 70)
     if premium_buys:
-        print(f"{'股票':<12} {'价格':>10} {'多因子':>8} {'抄底置信':>10} {'综合分':>8} {'原因'}")
+        print(f"{'股票':<12} {'价格':>10} {'多因子':>8} {'置信度':>10} {'综合分':>8} {'原因'}")
         print("-" * 70)
         for s in premium_buys[:top_n]:
-            print(f"{s['symbol']:<12} ${s['price']:>8.2f} {s['mf_score']:>7.1f} {s['mr_confidence']:>9.0%} {s['combined_score']:>7.1f}   {s['mr_reason'][:30]}")
+            print(f"{s['symbol']:<12} ${s['price']:>8.2f} {s['mf_score']:>7.1f} {s['confidence']:>9.0%} {s['combined_score']:>7.1f}   {s['reason'][:30]}")
     else:
-        print("   暂无 (等待优质股票回调)")
+        print("   暂无")
     print()
     
     # 🟢 普通抄底
-    print("🟢 【普通抄底】有信号但评分较低 (谨慎考虑)")
+    print("🟢 【普通信号】信号触发但评分一般")
     print("-" * 70)
     if normal_buys:
         shown = min(10, len(normal_buys))
         for s in normal_buys[:shown]:
-            print(f"   • {s['symbol']} @ ${s['price']:.2f} | 置信度 {s['mr_confidence']:.0%} | 多因子 {s['mf_score']:.1f}")
+            print(f"   • {s['symbol']} @ ${s['price']:.2f} | 置信度 {s['confidence']:.0%} | 多因子 {s['mf_score']:.1f} | {s['reason']}")
         if len(normal_buys) > shown:
             print(f"   ... 还有 {len(normal_buys) - shown} 只")
     else:
@@ -170,7 +197,7 @@ def scan_combined(category: str = "all", top_n: int = 30):
     print()
     
     # 📊 优质观望
-    print("📊 【优质观望】高评分但未超跌 (等待回调)")
+    print("📊 【优质观望】高评分但无信号 (等待)")
     print("-" * 70)
     if premium_watch:
         shown = min(10, len(premium_watch))
@@ -184,7 +211,7 @@ def scan_combined(category: str = "all", top_n: int = 30):
     
     # 📈 卖出信号（已持仓参考）
     if sell_signals:
-        print("📈 【反弹止盈】均值回归卖出信号 (已持仓参考)")
+        print("📈 【卖出信号】反弹止盈或止损 (已持仓参考)")
         print("-" * 70)
         for s in sell_signals[:10]:
             print(f"   • {s.symbol} @ ${s.price:.2f} | {s.reason}")
@@ -192,7 +219,7 @@ def scan_combined(category: str = "all", top_n: int = 30):
     
     # 汇总
     print("=" * 70)
-    print(f"📊 汇总: 优质抄底 {len(premium_buys)} | 普通抄底 {len(normal_buys)} | 优质观望 {len(premium_watch)} | 卖出 {len(sell_signals)}")
+    print(f"📊 汇总: 优质信号 {len(premium_buys)} | 普通信号 {len(normal_buys)} | 优质观望 {len(premium_watch)} | 卖出 {len(sell_signals)}")
     print("=" * 70)
     
     return {

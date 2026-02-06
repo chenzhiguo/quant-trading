@@ -157,11 +157,23 @@ LEVERAGED_ETF = [
 # 默认监控列表
 DEFAULT_WATCHLIST = US_TECH + US_AI[:3]
 
+# 优化后的精选列表 (剔除杠杆ETF和极度不稳定的个股)
+OPTIMIZED_BATCH = [
+    # 表现极佳的趋势股
+    "MU.US", "PLTR.US", "AVGO.US", "STX.US", "NVDA.US", "META.US", "NET.US",
+    # 稳健大盘股
+    "MSFT.US", "GOOGL.US", "QCOM.US", "WMT.US", "TSM.US", "INTU.US",
+    # 表现良好的中概股 (波段交易)
+    "BABA.US", "JD.US", "TCOM.US", "NTES.US",
+    # 潜力股 (需宽止损)
+    "TSLA.US", "AMD.US", "XPEV.US", "LI.US", "CRM.US"
+]
 
 def get_watchlist(category: str = "default") -> list:
     """获取自选股列表"""
     watchlists = {
         "default": DEFAULT_WATCHLIST,
+        "optimized": OPTIMIZED_BATCH,  # 新增: 优化后的列表
         "us_tech": US_TECH,
         "us_ai": US_AI,
         "us_moat": US_CORE_MOAT,
@@ -172,7 +184,7 @@ def get_watchlist(category: str = "default") -> list:
         "monitor": MONITOR_STOCKS,
         "etf": LEVERAGED_ETF,
         "china": list(set(HK_INTERNET + CN_ADR)),  # 所有中国公司
-        "all": list(set(US_TECH + US_AI + HK_INTERNET + CN_ADR + MONITOR_STOCKS + LEVERAGED_ETF)),
+        "all": list(set(US_TECH + US_AI + US_CORE_MOAT + US_CONSENSUS + HK_INTERNET + CN_ADR + MONITOR_STOCKS + LEVERAGED_ETF)),
     }
     return watchlists.get(category, DEFAULT_WATCHLIST)
 

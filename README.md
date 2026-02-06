@@ -174,96 +174,37 @@ trader = get_trader(dry_run=False)
 
 ## 交易策略
 
-所有策略继承自 `BaseStrategy`，实现 `analyze(symbol, data)` 方法返回 `TradeSignal`。
+### 核心策略: Regime Switching (趋势/震荡自动切换)
 
-### 信号类型
+结合 ADX (平均趋向指标) 自动识别市场状态，动态切换交易逻辑：
 
-```python
-class Signal(Enum):
-    BUY = "BUY"    # 买入
-    SELL = "SELL"  # 卖出
-    HOLD = "HOLD"  # 持有/观望
-```
+1. **强趋势模式 (ADX > 30)**
+   - 策略：**Alpha 101** (动量追踪)
+   - 逻辑：强者恒强，顺势而为。如果 Alpha 因子为正，买入；为负，卖出。
+   - 适用：大牛市、板块轮动主升浪。
 
-### 信号结构
+2. **观望模式 (20 <= ADX <= 30)**
+   - 策略：**空仓等待**
+   - 逻辑：趋势不明显且震荡幅度不够，此时交易容易产生亏损（“绞肉机”行情）。系统将暂停开新仓，但会维持现有持仓的止损止盈。
 
-```python
-@dataclass
-class TradeSignal:
-    symbol: str        # 股票代码
-    signal: Signal     # 信号类型
-    price: float       # 当前价格
-    reason: str        # 信号原因
-    confidence: float  # 置信度 (0-1)
-    timestamp: datetime
-```
+3. **震荡模式 (ADX < 20)**
+   - 策略：**Mean Reversion** (均值回归)
+   - 逻辑：RSI 超卖 (<35) 买入，超买 (>65) 卖出。
+   - 适用：箱体震荡、盘整行情。
 
----
+### 智能风控 (Smart Stop)
 
-### 策略 1: 均线交叉 (`MACrossStrategy`)
+风控系统现已全面升级为 **波动率自适应 (Adaptive Risk)** 模式：
 
-**原理：** 短期均线与长期均线的交叉判断趋势转换。
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `short_period` | 5 | 短期均线周期 |
-| `long_period` | 20 | 长期均线周期 |
-
-**信号规则：**
-
-| 信号 | 条件 | 置信度计算 |
-|------|------|------------|
-| 🟢 **买入（金叉）** | MA5 从下方上穿 MA20 | 均线差距越大，置信度越高 |
-| 🔴 **卖出（死叉）** | MA5 从上方下穿 MA20 | 均线差距越大，置信度越高 |
-| ⚪ **持有** | 无交叉发生 | 0.5 |
-
-**使用示例：**
-
-```python
-from strategies.ma_cross import MACrossStrategy
-
-strategy = MACrossStrategy(short_period=5, long_period=20)
-signal = strategy.analyze("NVDA.US", kline_data)
-print(signal)
-# 🟢 BUY NVDA.US @ 188.52 (12%) - MA5上穿MA20 (金叉)
-```
+| 风控项 | 逻辑 | 说明 |
+|--------|------|------|
+| **ATR 止损** | `Cost - ATR * 3.0` | 无论是稳健股还是高波股，均使用 ATR 动态设置止损线，适应不同股票的波动特性。 |
+| **追踪止盈** | `Trailing Stop` | 浮盈 > 5% 开启追踪；最高点回撤 5% 触发止盈。 |
+| **观望区保护** | `Wait Zone` | 当 ADX 进入 20-30 区间时，禁止开新仓，防止在趋势反转初期频繁止损。 |
 
 ---
 
-### 策略 2: 动量策略 (`MomentumStrategy`)
-
-**原理：** 追踪强势股票，结合 RSI 过滤超买超卖。
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `lookback` | 20 | 动量计算周期（天） |
-| `rsi_period` | 14 | RSI 计算周期 |
-| `rsi_oversold` | 30 | RSI 超卖阈值 |
-| `rsi_overbought` | 70 | RSI 超买阈值 |
-
-**信号规则：**
-
-| 信号 | 条件 | 说明 |
-|------|------|------|
-| 🟢 **买入** | 20日涨幅 > 5% 且 RSI < 70 | 强势但未超买 |
-| 🔴 **卖出** | RSI > 70（超买） | 技术性回调风险 |
-| 🔴 **卖出** | 20日跌幅 < -5% | 趋势走弱 |
-| ⚪ **持有** | 其他情况 | - |
-
-**使用示例：**
-
-```python
-from strategies.momentum import MomentumStrategy
-
-strategy = MomentumStrategy(lookback=20, rsi_period=14)
-signal = strategy.analyze("GOOGL.US", kline_data)
-print(signal)
-# 🟢 BUY GOOGL.US @ 334.55 (15%) - 20日涨幅 6.7%, RSI 69
-```
-
----
-
-### 技术指标（基类提供）
+## 快速开始
 
 `BaseStrategy` 提供以下技术指标计算方法：
 

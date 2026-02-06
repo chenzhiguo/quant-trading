@@ -88,7 +88,7 @@ def scan_and_execute(
             signal = None
             strategy_name = ""
             
-            if regime.adx > 25:
+            if regime.adx > 30:
                 # === 强趋势模式 ===
                 strategy_name = "Alpha101(趋势)"
                 raw_signal = strategy_alpha.analyze(symbol, df_list)
@@ -100,8 +100,8 @@ def scan_and_execute(
                 elif regime.regime == MarketRegime.TRENDING_DOWN and raw_signal.signal == Signal.SELL:
                     signal = raw_signal
                     signal.reason = f"[顺势止损] {signal.reason}"
-                    
-            else:
+            
+            elif regime.adx < 20:
                 # === 震荡模式 ===
                 strategy_name = "MeanReversion(震荡)"
                 raw_signal = strategy_mr.analyze(symbol, df_list)
@@ -111,6 +111,11 @@ def scan_and_execute(
                 elif signal.signal == Signal.SELL:
                     signal.reason = f"[震荡高抛] {signal.reason}"
             
+            else:
+                # === 观望区域 (20 <= ADX <= 30) ===
+                print(f"   ⏸️ {symbol:<8} | 状态: 观望区域 (ADX={regime.adx:.1f}) | 无操作")
+                continue
+
             # 4. 信号分类
             if signal and signal.signal in [Signal.BUY, Signal.SELL]:
                 print(f"   📊 {symbol:<8} | 状态: {regime.description[:10]}.. | 策略: {strategy_name} -> {signal.signal.value}")

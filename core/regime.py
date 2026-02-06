@@ -78,8 +78,8 @@ class RegimeDetector:
         
         # 判定逻辑
         
-        # 1. 强趋势判断 (ADX > 25)
-        if adx > 25:
+        # 1. 强趋势判断 (ADX > 30)
+        if adx > 30:
             # 判断方向
             if ma20 > ma50 > ma200:
                 return RegimeAnalysis(
