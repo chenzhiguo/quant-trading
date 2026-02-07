@@ -4,7 +4,8 @@ Regime Switching Strategy (趋势/震荡切换策略)
 """
 import pandas as pd
 import numpy as np
-from .base import BaseStrategy, Signal, TradeSignal
+import backtrader as bt # 引入 backtrader
+from strategies.base import BaseStrategy, Signal, TradeSignal
 
 class RegimeSwitchingStrategy(BaseStrategy):
     name = "RegimeSwitching"
@@ -19,7 +20,7 @@ class RegimeSwitchingStrategy(BaseStrategy):
         self.alpha_threshold = self.params.get('alpha_threshold', 0.5)
         
     def analyze(self, symbol: str, data: list) -> TradeSignal:
-        if not data or len(data) < 50:
+        if not data or len(data) < 15:
             return TradeSignal(symbol, Signal.HOLD, 0, "数据不足", 0)
             
         # 转为 DataFrame
@@ -146,3 +147,99 @@ class RegimeSwitchingStrategy(BaseStrategy):
         df['volatility'] = df['returns'].rolling(60).std() * np.sqrt(252)
         
         return df
+
+class BT_RegimeSwitchingStrategy(bt.Strategy):
+    params = dict(
+        adx_threshold = 30,
+        adx_wait_threshold = 20,
+        rsi_oversold = 35,
+        rsi_overbought = 65,
+        alpha_threshold = 0.5,
+    )
+
+    def __init__(self):
+        self.strategy_impl = RegimeSwitchingStrategy(params=self.p.__dict__)
+        self.dataclose = self.datas[0].close
+        self.order = None # 跟踪订单
+        print("BT_RegimeSwitchingStrategy instance created!")
+
+    def next(self):
+        print(f"[{bt.num2date(self.data.datetime[0]).isoformat()}] next() called for {self.datas[0]._name}")
+        data_dicts = []
+        # 获取所有可用的历史数据，从最旧的到最新的
+        # self.data.buflen() 是可用的数据点数量
+        # self.data.close[-idx] 可以访问历史数据，-idx = -(self.data.buflen() - 1) 是最旧的
+        for i in range(-self.data.buflen() + 1, 1): # 从最旧的 bar 到当前 bar (索引 0)
+            dt = bt.num2date(self.data.datetime[i])
+            if pd.isna(self.data.close[i]):
+                continue
+            data_dicts.append({
+                'date': dt.isoformat(),
+                'open': self.data.open[i],
+                'high': self.data.high[i],
+                'low': self.data.low[i],
+                'close': self.data.close[i],
+                'volume': self.data.volume[i] if not pd.isna(self.data.volume[i]) else 0,
+            })
+        
+        print(f"[{dt.isoformat()}] Current bar: {dt.isoformat()}, Data length for analyze: {len(data_dicts)}")
+
+        symbol = self.datas[0]._name 
+
+        trade_signal = self.strategy_impl.analyze(symbol, data_dicts)
+        print(f"[{dt.isoformat()}] Trade Signal: {trade_signal.signal.value} ({trade_signal.reason})")
+
+        if self.order: # 如果有挂单，则不发出新信号
+            return
+
+        if trade_signal.signal == Signal.BUY:
+            if self.broker.getcash() > 0: # 确保有现金
+                # 计算可以买入的股数 (例如，使用所有可用现金的80%)
+                size = int(self.broker.getcash() / self.dataclose[0] * 0.8) 
+                if size > 0:
+                    self.order = self.buy(size=size)
+                    print(f'[{dt.isoformat()}] BUY CREATE, {self.dataclose[0]:.2f}, Size: {size}')
+
+        elif trade_signal.signal == Signal.SELL:
+            if self.position.size > 0: # 确保持有仓位
+                # 卖出所有仓位
+                self.order = self.sell(size=self.position.size)
+                print(f'[{dt.isoformat()}] SELL CREATE, {self.dataclose[0]:.2f}, Size: {self.position.size}')
+
+    def notify_order(self, order):
+        if order.status in [order.Submitted, order.Accepted]:
+            # Buy/Sell order submitted/accepted to/by broker - Nothing to do
+            return
+
+        # Check if an order has been completed
+        # Attention: broker could reject order if not enough cash
+        if order.status in [order.Completed]:
+            dt = self.datas[0].datetime.date(0)
+            if order.isbuy():
+                print(
+                    '[%s] BUY EXECUTED, Price: %.2f, Cost: %.2f, Comm %.2f' %
+                    (dt.isoformat(),
+                     order.executed.price,
+                     order.executed.value,
+                     order.executed.comm))
+            else:  # Sell
+                print('[%s] SELL EXECUTED, Price: %.2f, Cost: %.2f, Comm %.2f' %
+                         (dt.isoformat(),
+                          order.executed.price,
+                          order.executed.value,
+                          order.executed.comm))
+
+            self.bar_executed = len(self)
+
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            dt = self.datas[0].datetime.date(0)
+            print('[%s] Order Canceled/Margin/Rejected' % dt.isoformat())
+
+        # Write down: no pending order
+        self.order = None
+
+    def notify_trade(self, trade):
+        if not trade.isclosed:
+            return
+        dt = self.datas[0].datetime.date(0)
+        print(f'[{dt.isoformat()}] OPERATION PROFIT, GROSS {trade.pnl:.2f}, NET {trade.pnlcomm:.2f}')

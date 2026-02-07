@@ -10,14 +10,20 @@ class BT_RegimeSwitchingStrategy(bt.Strategy):
     - 震荡状态 (ADX < 25) -> 执行 均值回归 逻辑 (高抛低吸)
     """
     params = (
-        ('adx_period', 14),
-        ('adx_threshold', 25), # 旧参数：ADX 阈值 25
-        ('adx_wait_threshold', 25), # 旧参数：ADX 25 以下即为震荡，无观望区
+        ('adx_period', 14), # Add ADX period back
+        ('adx_threshold', 30), # 强趋势状态判断ADX > 30
+        ('adx_wait_threshold', 20), # 震荡状态判断ADX < 20, 观望区 20 <= ADX <= 30
         ('alpha_period', 10),
         ('rsi_period', 14),
         ('rsi_oversold', 30),
         ('rsi_overbought', 70),
         ('ma_period', 20),
+        
+        # 新增均线和布林带参数
+        ('short_ma_period', 10),
+        ('long_ma_period', 20),
+        ('bb_period', 20),
+        ('bb_dev', 2.0), # 布林带标准差倍数
         
         # === 旧参数：无追踪止盈，可能使用固定止损 ===
         ('atr_period', 14),
@@ -25,13 +31,17 @@ class BT_RegimeSwitchingStrategy(bt.Strategy):
         ('trailing_start_pct', 99.0),  # 禁用追踪止盈 (设为很大)
         ('trailing_stop_pct', 0.05),
         
+        ('log_filepath', None), # 新增：日志文件路径
         ('printlog', True),
     )
 
     def log(self, txt, dt=None):
         if self.params.printlog:
             dt = dt or self.datas[0].datetime.date(0)
-            print(f'{dt.isoformat()}, {txt}')
+            log_message = f'{dt.isoformat()}, {txt}'
+            print(log_message) # 仍然打印到控制台，以便快速查看
+            if self.log_file:
+                self.log_file.write(log_message + '\n')
 
     def __init__(self):
         # 1. 核心指标: ADX (状态识别)
@@ -47,12 +57,22 @@ class BT_RegimeSwitchingStrategy(bt.Strategy):
         self.rsi = bt.indicators.RSI(self.datas[0], period=self.params.rsi_period)
         self.sma = bt.indicators.SimpleMovingAverage(self.datas[0], period=self.params.ma_period)
         
+        # 新增均线和布林带指标
+        self.short_ma = bt.indicators.SMA(self.datas[0].close, period=self.params.short_ma_period)
+        self.long_ma = bt.indicators.SMA(self.datas[0].close, period=self.params.long_ma_period)
+        self.bband = bt.indicators.BollingerBands(self.datas[0].close, period=self.params.bb_period, devfactor=self.params.bb_dev)
+        
         # 4. ATR (智能止损)
         self.atr = bt.indicators.ATR(self.datas[0], period=self.params.atr_period)
         
         self.regime = None # 当前状态记录
         self.stop_price = None # 当前止损价
         self.highest_price = None # 持仓期间最高价 (用于追踪止损)
+
+        if self.params.log_filepath:
+            self.log_file = open(self.params.log_filepath, 'w')
+        else:
+            self.log_file = None
 
     def next(self):
         current_adx = self.adx[0]
@@ -92,11 +112,12 @@ class BT_RegimeSwitchingStrategy(bt.Strategy):
         # ----------------------------------------
         # 状态判定
         # ----------------------------------------
-        if current_adx > self.params.adx_threshold:
+        # ADX 阈值调整为 30 (强趋势) 和 20 (震荡)
+        if current_adx > self.params.adx_threshold: # ADX > 30 强趋势
             current_regime = 'TREND'
-        elif current_adx < self.params.adx_wait_threshold:
+        elif current_adx < self.params.adx_wait_threshold: # ADX < 20 震荡
             current_regime = 'RANGE'
-        else: # ADX 在 adx_wait_threshold 和 adx_threshold 之间
+        else: # 20 <= ADX <= 30 观望区
             current_regime = 'WAIT'
             
         # 状态切换日志
@@ -116,36 +137,55 @@ class BT_RegimeSwitchingStrategy(bt.Strategy):
                 self.log(f'⏸️ WAIT REGIME, NO TRADING (ADX={current_adx:.1f})')
             return # 在观望区域直接返回，不执行交易逻辑
             
-        # === 场景 A: 强趋势 (跑 Alpha 101) ===
+        # === 场景 A: 强趋势 (跑 Alpha 101 + MA金叉确认) ===
         if current_regime == 'TREND':
             # Alpha#101 计算
             denominator = (self.datahigh[0] - self.datalow[0]) + 0.001
             alpha_101 = (self.dataclose[0] - self.dataopen[0]) / denominator
             
-            # 趋势策略买入: 强阳线 + 无持仓
+            # 趋势策略买入: 强阳线 + 无持仓 + MA金叉确认
             if not self.position:
-                if alpha_101 > 0.5:
-                    self.log(f'[Trend-Buy] Strong Alpha ({alpha_101:.2f}) in Trend (ADX={current_adx:.1f})')
+                # 价格突破 Alpha 101 信号
+                alpha_buy_signal = alpha_101 > 0.5
+                
+                # MA金叉确认条件
+                ma_golden_cross = (self.short_ma[-1] <= self.long_ma[-1]) and \
+                                  (self.short_ma[0] > self.long_ma[0])
+                
+                if alpha_buy_signal and ma_golden_cross:
+                    self.log(f'[Trend-Buy] Strong Alpha ({alpha_101:.2f}) AND MA Golden Cross in Trend (ADX={current_adx:.1f})')
                     self.buy()
             
-            # 趋势策略卖出: 强阴线 + 有持仓
+            # 趋势策略卖出: 强阴线 + 有持仓 (保持不变，因为是止损或止盈)
             elif self.position:
                 if alpha_101 < -0.5:
                     self.log(f'[Trend-Sell] Weak Alpha ({alpha_101:.2f}) in Trend (ADX={current_adx:.1f})')
                     self.sell()
                     
-        # === 场景 B: 震荡市 (跑 Mean Reversion) ===
+        # === 场景 B: 震荡市 (跑 Mean Reversion + 布林带确认) ===
         elif current_regime == 'RANGE':
-            # 震荡策略买入: 跌破均线 + RSI超卖
+            # 震荡策略买入: 跌破均线 + RSI超卖 + 布林带下轨确认
             if not self.position:
-                if self.dataclose[0] < self.sma[0] and self.rsi[0] < self.params.rsi_oversold:
-                    self.log(f'[Range-Buy] Oversold (RSI={self.rsi[0]:.1f}) in Range (ADX={current_adx:.1f})')
+                # RSI超卖信号
+                rsi_oversold_signal = self.rsi[0] < self.params.rsi_oversold
+                
+                # 布林带下轨确认条件
+                bb_lower_band_confirm = self.dataclose[0] < self.bband.lines.bot[0]
+                
+                if self.dataclose[0] < self.sma[0] and rsi_oversold_signal and bb_lower_band_confirm:
+                    self.log(f'[Range-Buy] Oversold (RSI={self.rsi[0]:.1f}) AND BB Lower Band in Range (ADX={current_adx:.1f})')
                     self.buy()
             
-            # 震荡策略卖出: RSI超买 (高抛)
+            # 震荡策略卖出: RSI超买 + 布林带上轨确认 (高抛)
             elif self.position:
-                if self.rsi[0] > self.params.rsi_overbought:
-                    self.log(f'[Range-Sell] Overbought (RSI={self.rsi[0]:.1f}) in Range (ADX={current_adx:.1f})')
+                # RSI超买信号
+                rsi_overbought_signal = self.rsi[0] > self.params.rsi_overbought
+                
+                # 布林带上轨确认条件
+                bb_upper_band_confirm = self.dataclose[0] > self.bband.lines.top[0]
+                
+                if rsi_overbought_signal and bb_upper_band_confirm:
+                    self.log(f'[Range-Sell] Overbought (RSI={self.rsi[0]:.1f}) AND BB Upper Band in Range (ADX={current_adx:.1f})')
                     self.sell()
 
     def notify_order(self, order):
@@ -164,3 +204,7 @@ class BT_RegimeSwitchingStrategy(bt.Strategy):
                 self.log(f'>>> EXECUTED SELL @ {order.executed.price:.2f}')
                 self.stop_price = None
                 self.highest_price = None
+
+    def stop(self):
+        if self.log_file:
+            self.log_file.close()
