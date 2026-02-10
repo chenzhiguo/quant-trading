@@ -68,16 +68,24 @@ def scan_combined(category: str = "all", top_n: int = 30):
         rsi_overbought=60,
     )
     
-    # 策略 2: 趋势切换 (趋势跟踪 + 震荡)
-    rs_strategy = RegimeSwitchingStrategy()
+    # 策略 2: 趋势切换 (趋势跟踪 + 震荡) - 使用 Optimized V2 参数
+    rs_strategy = RegimeSwitchingStrategy(params={
+        'adx_threshold': 30,
+        'adx_wait_threshold': 25, # 提高观望阈值
+        'rsi_oversold': 30,       # 降低超卖阈值防止接飞刀
+        'rsi_overbought': 70,
+        'alpha_threshold': 0.5,
+        'ema_short': 20,          # 趋势过滤
+        'ema_long': 50
+    })
     
     buy_signals = []
     sell_signals = []
     
     for symbol in symbols:
         try:
-            data = fetcher.get_kline_df(symbol, days=100) # 增加天数以计算ADX
-            if not data or len(data) < 50:
+            data = fetcher.get_kline_df(symbol, days=150) # 增加天数以确保 EMA50 计算准确
+            if not data or len(data) < 60:
                 continue
             
             # 运行两个策略
@@ -98,147 +106,98 @@ def scan_combined(category: str = "all", top_n: int = 30):
             
             elif sig_mr.signal == Signal.BUY:
                 final_signal = sig_mr
-            
-            # 卖出信号逻辑同理
-            elif sig_rs.signal == Signal.SELL:
-                final_signal = sig_rs
-            elif sig_mr.signal == Signal.SELL:
-                final_signal = sig_mr
-                
-            if final_signal:
-                if final_signal.signal == Signal.BUY:
-                    buy_signals.append(final_signal)
-                elif final_signal.signal == Signal.SELL:
-                    sell_signals.append(final_signal)
+
+            # 如果没有买入信号，检查卖出信号
+            if not final_signal or final_signal.signal != Signal.BUY:
+                if sig_rs.signal == Signal.SELL:
+                    sell_signals.append(sig_rs)
+                elif sig_mr.signal == Signal.SELL:
+                    sell_signals.append(sig_mr)
+            else:
+                buy_signals.append(final_signal)
                 
         except Exception as e:
-            pass
-    
+            print(f"Error scanning {symbol}: {e}")
+            continue
+
     print(f"   ✅ 买入信号: {len(buy_signals)} | 卖出信号: {len(sell_signals)}\n")
-    
-    # ========== 3. 组合分析 ==========
+
+    # ========== 3. 组合分析 & 输出 ==========
     print("🔗 组合分析...\n")
     
-    # 分类结果
-    premium_buys = []    # 🌟 优质信号：高评分 + 买入信号
-    normal_buys = []     # 🟢 普通信号：买入信号但评分一般
-    premium_watch = []   # 📊 优质观望：高评分但无信号
+    # 分类买入信号
+    high_quality_buys = []
+    normal_buys = []
     
-    SCORE_THRESHOLD = 60  # 多因子评分阈值
-    
-    for signal in buy_signals:
-        stock_info = score_map.get(signal.symbol, {})
-        mf_score = stock_info.get('total_score', 0)
+    for sig in buy_signals:
+        score_info = score_map.get(sig.symbol, {})
+        score = score_info.get('score', 0)
         
-        combined = {
-            'symbol': signal.symbol,
-            'price': signal.price,
-            'mf_score': mf_score,
-            'confidence': signal.confidence,
-            'reason': signal.reason,
-            'pe': stock_info.get('pe_ttm', 0),
-            'roe': stock_info.get('roe', 0),
-            'mom_12m': stock_info.get('mom_12m', 0),
-            # 综合评分
-            'combined_score': mf_score * 0.5 + signal.confidence * 50
+        # 组合信息
+        combined_info = {
+            'symbol': sig.symbol,
+            'price': sig.price,
+            'signal': sig.reason,
+            'confidence': sig.confidence,
+            'score': score,
+            'mf_rank': score_info.get('rank', 999),
+            'factors': f"ROE {score_info.get('roe', 0):.1f}%"
         }
         
-        if mf_score >= SCORE_THRESHOLD:
-            premium_buys.append(combined)
+        if score >= 60 and sig.confidence > 0.6:
+            high_quality_buys.append(combined_info)
         else:
-            normal_buys.append(combined)
+            normal_buys.append(combined_info)
+            
+    # 优质观望 (高分但无信号)
+    high_quality_watches = []
+    buy_symbols = {s['symbol'] for s in high_quality_buys + normal_buys}
     
-    # 高评分但没信号的股票
     for symbol, info in score_map.items():
-        if info['total_score'] >= SCORE_THRESHOLD:
-            # 检查是否已在买入信号里
-            if not any(s.symbol == symbol for s in buy_signals):
-                # 检查是否在卖出信号里（已涨，不推荐）
-                if not any(s.symbol == symbol for s in sell_signals):
-                    premium_watch.append({
-                        'symbol': symbol,
-                        'price': info['price'],
-                        'mf_score': info['total_score'],
-                        'pe': info.get('pe_ttm', 0),
-                        'roe': info.get('roe', 0),
-                        'mom_12m': info.get('mom_12m', 0),
-                    })
+        if symbol not in buy_symbols and info.get('score', 0) >= 60:
+            high_quality_watches.append({
+                'symbol': symbol,
+                'price': info.get('close', 0), # 这里可能需要最新价格
+                'score': info.get('score', 0),
+                'factors': f"ROE {info.get('roe', 0):.1f}%"
+            })
+            
+    # 按分数排序
+    high_quality_buys.sort(key=lambda x: x['score'], reverse=True)
+    normal_buys.sort(key=lambda x: x['confidence'], reverse=True)
+    high_quality_watches.sort(key=lambda x: x['score'], reverse=True)
     
-    # 排序
-    premium_buys.sort(key=lambda x: -x['combined_score'])
-    normal_buys.sort(key=lambda x: -x['confidence'])
-    premium_watch.sort(key=lambda x: -x['mf_score'])
+    # --- 输出结果 ---
     
-    # ========== 4. 输出结果 ==========
-    
-    # 🌟 优质抄底
     print("🌟 【优质信号】高评分 + 强力信号")
     print("-" * 70)
-    if premium_buys:
-        print(f"{'股票':<12} {'价格':>10} {'多因子':>8} {'置信度':>10} {'综合分':>8} {'原因'}")
-        print("-" * 70)
-        for s in premium_buys[:top_n]:
-            print(f"{s['symbol']:<12} ${s['price']:>8.2f} {s['mf_score']:>7.1f} {s['confidence']:>9.0%} {s['combined_score']:>7.1f}   {s['reason'][:30]}")
-    else:
+    if not high_quality_buys:
         print("   暂无")
-    print()
-    
-    # 🟢 普通抄底
-    print("🟢 【普通信号】信号触发但评分一般")
+    for s in high_quality_buys:
+        print(f"   • {s['symbol']} @ ${s['price']:.2f} | 评分 {s['score']:.1f} | {s['signal']}")
+
+    print("\n🟢 【普通信号】信号触发但评分一般")
     print("-" * 70)
-    if normal_buys:
-        shown = min(10, len(normal_buys))
-        for s in normal_buys[:shown]:
-            print(f"   • {s['symbol']} @ ${s['price']:.2f} | 置信度 {s['confidence']:.0%} | 多因子 {s['mf_score']:.1f} | {s['reason']}")
-        if len(normal_buys) > shown:
-            print(f"   ... 还有 {len(normal_buys) - shown} 只")
-    else:
+    if not normal_buys:
         print("   暂无")
-    print()
-    
-    # 📊 优质观望
-    print("📊 【优质观望】高评分但无信号 (等待)")
+    for s in normal_buys[:15]: # 只显示前15个
+        print(f"   • {s['symbol']} @ ${s['price']:.2f} | 置信度 {s['confidence']:.0%} | 多因子 {s['score']:.1f} | {s['signal']}")
+    if len(normal_buys) > 15:
+        print(f"   ... 还有 {len(normal_buys)-15} 只")
+
+    print("\n📊 【优质观望】高评分但无信号 (等待)")
     print("-" * 70)
-    if premium_watch:
-        shown = min(10, len(premium_watch))
-        for s in premium_watch[:shown]:
-            print(f"   • {s['symbol']} @ ${s['price']:.2f} | 多因子 {s['mf_score']:.1f} | ROE {s['roe']:.1%}")
-        if len(premium_watch) > shown:
-            print(f"   ... 还有 {len(premium_watch) - shown} 只")
-    else:
-        print("   暂无")
-    print()
-    
-    # 📈 卖出信号（已持仓参考）
-    if sell_signals:
-        print("📈 【卖出信号】反弹止盈或止损 (已持仓参考)")
-        print("-" * 70)
-        for s in sell_signals[:10]:
-            print(f"   • {s.symbol} @ ${s.price:.2f} | {s.reason}")
-        print()
-    
-    # 汇总
+    for s in high_quality_watches[:10]:
+        print(f"   • {s['symbol']} @ ${s['price']:.2f} | 多因子 {s['score']:.1f} | {s['factors']}")
+
+    print("\n📈 【卖出信号】反弹止盈或止损 (已持仓参考)")
+    print("-" * 70)
+    for s in sell_signals[:10]:
+        print(f"   • {s.symbol} @ ${s.price:.2f} | {s.reason}")
+        
+    print("\n" + "=" * 70)
+    print(f"📊 汇总: 优质信号 {len(high_quality_buys)} | 普通信号 {len(normal_buys)} | 优质观望 {len(high_quality_watches)} | 卖出 {len(sell_signals)}")
     print("=" * 70)
-    print(f"📊 汇总: 优质信号 {len(premium_buys)} | 普通信号 {len(normal_buys)} | 优质观望 {len(premium_watch)} | 卖出 {len(sell_signals)}")
-    print("=" * 70)
-    
-    return {
-        'premium_buys': premium_buys,
-        'normal_buys': normal_buys,
-        'premium_watch': premium_watch,
-        'sell_signals': sell_signals,
-    }
-
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="组合策略扫描")
-    parser.add_argument("--list", "-l", type=str, default="all", help="股票池")
-    parser.add_argument("--top", "-n", type=int, default=20, help="显示数量")
-    
-    args = parser.parse_args()
-    scan_combined(args.list, args.top)
-
 
 if __name__ == "__main__":
-    main()
+    scan_combined()
